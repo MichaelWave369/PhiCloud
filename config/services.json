@@ -1,18 +1,109 @@
 {
   "schema": "phicloud.services.v0.1",
   "services": [
-    {"id":"phiid","title":"PhiID","role":"identity","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phimail","title":"PhiMail","role":"mail","stage":"integration-needed","repository":"https://github.com/MichaelWave369/PhiMail","endpoint_hint":null},
-    {"id":"phishield","title":"PhiShield","role":"security","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phivault","title":"PhiVault","role":"storage","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phisync","title":"PhiSync","role":"sync","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phicompute","title":"PhiCompute","role":"compute","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phibase","title":"PhiBase","role":"data","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phinet","title":"PhiNet","role":"network","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phiroute","title":"PhiRoute","role":"dns","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phitrigger","title":"PhiTrigger","role":"functions","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phieye","title":"PhiEye","role":"observability","stage":"planned","repository":null,"endpoint_hint":null},
-    {"id":"phiserve","title":"PhiServe","role":"inference","stage":"integration-needed","repository":"https://github.com/MichaelWave369/PhiServe","endpoint_hint":"http://127.0.0.1:11435"},
-    {"id":"phiapi","title":"PhiAPI","role":"gateway","stage":"planned","repository":null,"endpoint_hint":null}
+    {
+      "id": "phiid",
+      "title": "PhiID",
+      "role": "identity",
+      "stage": "planned",
+      "repository": "https://github.com/MichaelWave369/PhiID",
+      "endpoint_hint": null
+    },
+    {
+      "id": "phimail",
+      "title": "PhiMail",
+      "role": "mail",
+      "stage": "integration-needed",
+      "repository": "https://github.com/MichaelWave369/PhiMail",
+      "endpoint_hint": null
+    },
+    {
+      "id": "phishield",
+      "title": "PhiShield",
+      "role": "security",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phivault",
+      "title": "PhiVault",
+      "role": "storage",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phisync",
+      "title": "PhiSync",
+      "role": "sync",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phicompute",
+      "title": "PhiCompute",
+      "role": "compute",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phibase",
+      "title": "PhiBase",
+      "role": "data",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phinet",
+      "title": "PhiNet",
+      "role": "network",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phiroute",
+      "title": "PhiRoute",
+      "role": "dns",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phitrigger",
+      "title": "PhiTrigger",
+      "role": "functions",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phieye",
+      "title": "PhiEye",
+      "role": "observability",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    },
+    {
+      "id": "phiserve",
+      "title": "PhiServe",
+      "role": "inference",
+      "stage": "integration-needed",
+      "repository": "https://github.com/MichaelWave369/PhiServe",
+      "endpoint_hint": "http://127.0.0.1:11435"
+    },
+    {
+      "id": "phiapi",
+      "title": "PhiAPI",
+      "role": "gateway",
+      "stage": "planned",
+      "repository": null,
+      "endpoint_hint": null
+    }
   ]
 }
