@@ -38,6 +38,8 @@ For PhiMail R1's **development-only service declaration adapter**, see [the PhiM
 
 See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contract](docs/PHIID_PHIMAIL_IDENTITY.md), and [roadmap](docs/ROADMAP.md).
 
+PhiID and PhiMail now share a **local development OIDC issuer** through independent clients. PhiCloud still exposes **no identity gateway or mail API**; see [R2 verified-identity boundary](docs/PHIMAIL_IDENTITY_R2.md).
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
