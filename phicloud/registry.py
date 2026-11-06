@@ -36,6 +36,7 @@ def _endpoint_hint_is_safe(value: str | None) -> bool:
         if parsed.query or parsed.fragment:
             return False
         # Limit host syntax and avoid misleading local-domain or encoded-host variants.
+        _ = parsed.port  # reject malformed ports even though no connection is made
         host = parsed.hostname
         if parsed.scheme == "https":
             return bool(host) and not host.endswith(".invalid")
@@ -67,9 +68,9 @@ def validate_manifest(manifest: object) -> dict:
         seen.add(service_id)
         if not isinstance(svc["title"], str) or not (1 <= len(svc["title"]) <= 64):
             raise ManifestError(f"service {index}: invalid title")
-        if svc["role"] not in _ROLES:
+        if not isinstance(svc["role"], str) or svc["role"] not in _ROLES:
             raise ManifestError(f"service {index}: unsupported role")
-        if svc["stage"] not in _STAGES:
+        if not isinstance(svc["stage"], str) or svc["stage"] not in _STAGES:
             raise ManifestError(f"service {index}: unsupported stage")
         repository = svc["repository"]
         if repository is not None:
@@ -88,9 +89,9 @@ def validate_manifest(manifest: object) -> dict:
 def load_manifest(path: str | Path) -> dict:
     """Read bounded UTF-8 JSON. Fail closed on missing or invalid inventory."""
     source = Path(path)
-    if source.stat().st_size > 128_000:
-        raise ManifestError("manifest too large")
     try:
+        if source.stat().st_size > 128_000:
+            raise ManifestError("manifest too large")
         contents = source.read_text(encoding="utf-8")
         parsed = json.loads(contents)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
