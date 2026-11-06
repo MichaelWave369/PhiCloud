@@ -1,0 +1,54 @@
+# Φ PhiCloud
+
+**Sovereign web services for the PhiOS ecosystem.**
+
+PhiCloud is the proposed **local-first service backbone** for PhiOS Desktop, WebOS, Mobile, and ecosystem applications such as PhiMail and PhiServe. The project is designed to provide service discovery, identity integration, storage, synchronization, observability, and optional hosted infrastructure without making the cloud mandatory.
+
+> **Status: foundation / design stage.** This repository is being initialized. No hosted service, production identity provider, mailbox delivery, account sync, or deployed infrastructure is claimed.
+
+## Operating principles
+
+- **Sovereignty:** PhiOS must remain usable offline and without a PhiCloud account.
+- **Interoperability:** use open protocols, documented exports, and portable data.
+- **Capability is not authority:** signing in does not grant permission to execute actions on a user's device.
+- **Plain Sovereign first:** independently functional infrastructure, even if advisory orchestration is offline.
+- **Advisory before automation:** observable recommendations and audit records before privileged control.
+- **No fake availability:** registry declarations are not runtime health checks.
+- **No secrets in static sites, public manifests, source control, or browser bundles.**
+
+## Naming and responsibilities
+
+| Component | Responsibility |
+| --- | --- |
+| **PhiID** | Account identity, OIDC sign-in, passkeys, user lifecycle (future service) |
+| **PhiMail** | Email client, mailbox experience, and eventual optional hosted mail |
+| **PhiShield** | Policy enforcement and access control at service boundaries |
+| **PhiVault** | Object storage, files, backups and user-directed exports |
+| **PhiSync** | Opt-in cross-device data synchronization |
+| **PhiCompute / PhiBase** | Compute and database substrate |
+| **PhiNet / PhiRoute** | Private network and service discovery |
+| **PhiTrigger** | Governed functions, workflows and events |
+| **PhiEye** | Health, telemetry, operator explanations, audit |
+| **PhiServe** | Independently governed local AI serving; remote access is not implied |
+| **PhiKernel bridge** | Advisory-only, normalized contract, no internal implementation in this public repo |
+
+**PhiMail is the user-facing account doorway, not the security root.** Accounts use stable opaque identifiers (OIDC `sub`), while mailbox addresses are mutable login/contact aliases. Mail delivery and email recovery must never become the only access path to the operating system.
+
+See the proposed architecture, identity contract, and roadmap under [docs](docs/).
+
+## First executable milestone
+
+The initial pull request will add a **local-only, read-only discovery prototype** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any service inventory is explicitly declarative, not a live-health or integration claim.
+
+## Existing projects
+
+- [PhiOS](https://github.com/MichaelWave369/PhiOS)
+- [PhiMail](https://github.com/MichaelWave369/PhiMail)
+- [PhiServe](https://github.com/MichaelWave369/PhiServe)
+- [PhiMadaPrime](https://github.com/MichaelWave369/PhiMadaPrime)
+
+### Historical source
+
+PhiCloud MK1 v0.1-v0.3 specified a two-mode sovereign infrastructure with four planes (substrate, control, field, operator) and a read-only telemetry-to-audit control loop. Its **latest v0.3 operator-safe intent** informs this repo; private PhiKernel/TIEKAT internals are not reproduced here. The v0.2 and v0.3 threshold descriptions should not be mixed without an explicit contract revision.
+
+**License:** MIT (see LICENSE once added).
