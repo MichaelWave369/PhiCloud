@@ -25,3 +25,22 @@ jobs:
         run: |
           python -m compileall -q phicloud tests
           python -m unittest discover -s tests -v
+
+  anc-interoperability:
+    name: Pinned ANC -> PhiCloud risk advisory smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PhiCloud
+        uses: actions/checkout@v4
+      - name: Check out exact ANC commit (no floating main)
+        uses: actions/checkout@v4
+        with:
+          repository: MichaelWave369/ANC
+          ref: 3f7c0a083894d8038092f1648d113e8b809b7eee
+          path: external-anc
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Exercise actual ANC -> PhiCloud advisory boundary
+        run: PYTHONPATH=".:external-anc" python tests/anc_contract_smoke.py

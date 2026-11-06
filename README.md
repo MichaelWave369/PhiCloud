@@ -56,6 +56,24 @@ curl http://127.0.0.1:8769/v1/services
 
 The server always binds to `127.0.0.1`; it has no account, mailbox, remote request or mutating API. `/healthz` checks **only the registry process**, not whether any service is online. Service stage values are planning/integration labels, not observations. Do not expose this unauthenticated prototype directly to the internet.
 
+## PhiShield R0: local ANC-linked policy candidate (prototype)
+
+The PhiCloud repository now contains an **in-process, side-effect-free
+PhiShield policy consumer** at `phicloud/shield_policy.py`. It validates
+ANC's versioned risk advisory alongside independent, request-bound
+authority and consent evidence, then returns only `DENY`, `REVIEW`, or
+`CANDIDATE`. It never grants execution authority.
+
+The new CI interoperability job fetches ANC at an **exact commit**
+and verifies real ANC-generated advisory envelopes against PhiCloud's
+independent consumer. The existing registry HTTP server remains
+**read-only**, unauthenticated and **does not expose a policy endpoint**.
+This is not working PhiID authentication, live PhiShield enforcement,
+or a remotely accessible security API.
+
+See [the PhiShield R0 trust boundary](docs/PHISHIELD_ANC_LOCAL_R0.md).
+Test locally with `python -m unittest discover -s tests -v`.
+
 ## Existing projects
 
 - [PhiOS](https://github.com/MichaelWave369/PhiOS)
@@ -67,4 +85,4 @@ The server always binds to `127.0.0.1`; it has no account, mailbox, remote reque
 
 PhiCloud MK1 v0.1-v0.3 specified a two-mode sovereign infrastructure with four planes (substrate, control, field, operator) and a read-only telemetry-to-audit control loop. Its **latest v0.3 operator-safe intent** informs this repo; private PhiKernel/TIEKAT internals are not reproduced here. The v0.2 and v0.3 threshold descriptions should not be mixed without an explicit contract revision.
 
-**License:** MIT (see LICENSE once added).
+**License:** MIT (see [LICENSE](LICENSE)).
