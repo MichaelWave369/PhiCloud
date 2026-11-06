@@ -34,11 +34,23 @@ PhiCloud is the proposed **local-first service backbone** for PhiOS Desktop, Web
 
 **PhiMail is the user-facing account doorway, not the security root.** Accounts use stable opaque identifiers (OIDC `sub`), while mailbox addresses are mutable login/contact aliases. Mail delivery and email recovery must never become the only access path to the operating system.
 
-See the proposed architecture, identity contract, and roadmap under [docs](docs/).
+See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contract](docs/PHIID_PHIMAIL_IDENTITY.md), and [roadmap](docs/ROADMAP.md).
 
 ## First executable milestone
 
-The initial pull request will add a **local-only, read-only discovery prototype** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any service inventory is explicitly declarative, not a live-health or integration claim.
+The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
+
+Requirements: Python 3.11+; no third-party packages.
+
+```sh
+python -m unittest discover -s tests -v
+python -m phicloud.server --port 8769
+# In another terminal:
+curl http://127.0.0.1:8769/healthz
+curl http://127.0.0.1:8769/v1/services
+```
+
+The server always binds to `127.0.0.1`; it has no account, mailbox, remote request or mutating API. `/healthz` checks **only the registry process**, not whether any service is online. Service stage values are planning/integration labels, not observations. Do not expose this unauthenticated prototype directly to the internet.
 
 ## Existing projects
 
