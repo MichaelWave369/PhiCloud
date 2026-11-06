@@ -5,13 +5,13 @@
 integration, anti-malware product, or remote authentication API.**
 
 The planned PhiShield service now has a *reference* policy consumer under
-\`phicloud/shield_policy.py\`. It accepts ANC's versioned **R1 risk advisory**
+`phicloud/shield_policy.py`. It accepts ANC's versioned **R1 risk advisory**
 plus two independent, request-bound evidence objects, checks their mutual
 consistency and expiry, and returns a non-authoritative disposition.
 
 ## Trust boundaries
 
-\`\`\`text
+```text
 trusted PhiCloud service action context
   |-- verified PhiID principal (FUTURE: vetted OIDC verifier)
   |-- scoped capability (FUTURE: resource policy / revocation)
@@ -25,29 +25,29 @@ PhiCloud PhiShield R0 (pure library, no HTTP endpoints)
           +--> REVIEW    = never execute automatically
           +--> CANDIDATE = proceed to independent policy / enforcement
                               (NOT an authorization)
-\`\`\`
+```
 
 **No disposition permits direct side effects.** PhiOS retains authority over
 local files, OS tools, code execution and device activity. The server at
-\`127.0.0.1:8769\` remains a read-only *registry* and does not expose policy
+`127.0.0.1:8769` remains a read-only *registry* and does not expose policy
 requests. No code here loads real accounts, signing keys, secrets, or mailboxes.
 
 ## What it actually validates
 
 The in-process policy checks:
 
-- Exact request identity and binding across \`request_id\`, \`scope\`,
-  \`subject_issuer\`, \`subject_id\`, \`audience\`, \`action\` and \`resource\`.
+- Exact request identity and binding across `request_id`, `scope`,
+  `subject_issuer`, `subject_id`, `audience`, `action` and `resource`.
 - Independent, **externally obtained** authorization and consent evidence
   objects, each bound to that exact request with valid expiration.
-- The exact ANC \`phi369.anc.phishield.advisory.v1\` field set and version:
+- The exact ANC `phi369.anc.phishield.advisory.v1` field set and version:
   matching request ID/scope, timezone-aware freshness, valid posture/action,
-  bounded finite risk metrics, \`authority_granted=false\`, no extra fields.
-- Hostile/quarantined ANC posture or blocking recommendation triggers \`DENY\`.
-  Uncertain signals/posture trigger \`REVIEW\`; clean signals can produce
-  only \`CANDIDATE\`, never \`ALLOW\`.
+  bounded finite risk metrics, `authority_granted=false`, no extra fields.
+- Hostile/quarantined ANC posture or blocking recommendation triggers `DENY`.
+  Uncertain signals/posture trigger `REVIEW`; clean signals can produce
+  only `CANDIDATE`, never `ALLOW`.
 
-**Crucial limit:** \`AuthorityEvidence\` and \`ConsentEvidence\` dataclasses
+**Crucial limit:** `AuthorityEvidence` and `ConsentEvidence` dataclasses
 are not signed credentials. A caller could fabricate them. They are usable
 only in a trusted in-process test/integration, populated by a separate
 verified authority/consent engine. **Never parse these types from user JSON,
@@ -59,7 +59,7 @@ enforcement must be supplied by independently reviewed components.
 
 ## One-process demonstration
 
-\`\`\`python
+```python
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
@@ -90,12 +90,12 @@ result = evaluate_candidate(
 )
 assert result.disposition == "DENY"
 assert result.authoritative is False
-\`\`\`
+```
 
 ## CI verification
 
-1. \`python -m unittest discover -s tests -v\` tests denial,
-   binding, expiry, forged \`authority_granted\`, unknown schema,
+1. `python -m unittest discover -s tests -v` tests denial,
+   binding, expiry, forged `authority_granted`, unknown schema,
    malformed evidence, high risk veto, and no credential leakage.
 2. A separate CI job checks out **ANC at an exact pinned commit**
    and generates actual R1 advisory payloads with ANC's detector/scoring
@@ -104,8 +104,8 @@ assert result.authoritative is False
    no-consent paths. This does **not** make ANC a Python runtime
    dependency or vendor its source into PhiCloud.
 
-The dependency commit is pinned in \`.github/workflows/ci.yml\`; update it
-deliberately after ANC API changes, rather than silently tracking \`main\`.
+The dependency commit is pinned in `.github/workflows/ci.yml`; update it
+deliberately after ANC API changes, rather than silently tracking `main`.
 
 ## Next engineering steps
 
