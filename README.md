@@ -34,6 +34,8 @@ PhiCloud is the proposed **local-first service backbone** for PhiOS Desktop, Web
 
 **PhiMail is the user-facing account doorway, not the security root.** Accounts use stable opaque identifiers (OIDC `sub`), while mailbox addresses are mutable login/contact aliases. Mail delivery and email recovery must never become the only access path to the operating system.
 
+For PhiMail R1's **development-only service declaration adapter**, see [the PhiMail registry compatibility guide](docs/PHIMAIL_ADAPTER_R1.md). A successful inventory read never confirms service health or identity.
+
 See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contract](docs/PHIID_PHIMAIL_IDENTITY.md), and [roadmap](docs/ROADMAP.md).
 
 ## First executable milestone
