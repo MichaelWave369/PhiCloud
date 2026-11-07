@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -230,10 +231,7 @@ class SealedDemoStore:
                 " FROM sealed_markers WHERE tenant_id=? AND owner_key=? AND expires>?"
                 " ORDER BY id LIMIT ?", (tenant, owner, self._store._now(), MAX_PER_OWNER)
             ).fetchall()
-        if (not isinstance(marker_id, str)
-                or not self._store._ID.fullmatch(marker_id)
-                if hasattr(self._store, "_ID") else False):
-            # The only public route IDs are restricted by server routing too.
+        if not isinstance(marker_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{24,64}", marker_id):
             return []
         return self._store._db.execute(
             "SELECT id,tenant_id,owner_key,nonce,ciphertext,created,expires"
