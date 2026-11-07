@@ -40,6 +40,12 @@ See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contra
 
 PhiID and PhiMail now share a **local development OIDC issuer** through independent clients. PhiCloud still exposes **no identity gateway or mail API**; see [R2 verified-identity boundary](docs/PHIMAIL_IDENTITY_R2.md).
 
+## R10: AES-256-GCM synthetic owner-bound markers (private local demo)
+
+R10 adds a separately opted-in **encrypted synthetic canary** route. The server uses AES-256-GCM with tenant/owner/record authenticated data, a 256-bit key provisioned offline into an independent private key directory, fresh Keycloak introspection, and independent `phicloud.sealed.read` / `phicloud.sealed.write` scope checks. Tampering, wrong keys and missing keys fail closed, and offline tenant revocation removes that member's sealed markers.
+
+**No user-provided content or actual files are accepted.** This does **not** encrypt the entire SQLite database, provide production key management or recover lost keys. See [R10 setup, tests and limits](docs/R10_ENCRYPTED_SYNTHETIC_MARKERS.md).
+
 ## R9: Independent local revocation witness (stale-backup safety proof)
 
 The optional R9 recovery fence adds an owner-private **append-only witness file in a separate backup directory** for local tenant membership revocations. A copied older SQLite database with restored memberships **cannot silently re-enable** those memberships while the independent witness remains current. The protected server fails closed and the offline operator must explicitly perform **revoke-only reconciliation**; no access is ever regranted by recovery.
