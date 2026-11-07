@@ -40,6 +40,12 @@ See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contra
 
 PhiID and PhiMail now share a **local development OIDC issuer** through independent clients. PhiCloud still exposes **no identity gateway or mail API**; see [R2 verified-identity boundary](docs/PHIMAIL_IDENTITY_R2.md).
 
+## R12: Independent key-rotation witness and exact offline recovery (local demo)
+
+R12 adds a separately stored, **owner-private rotation witness** for the optional R11 synthetic envelope KEKs. Once enrolled, PhiCloud refuses an older restored SQLite database and matching old key when the witness records a newer rotation. The offline operator can reapply **only the exact pending transition**, without regranting tenant access or changing payload ciphertext.
+
+The witness must live apart from **both** SQLite backups and KEK files. It is not an immutable audit, production KMS, user-data recovery service or protection against rolling back all copies at once. See [R12 security model and operator instructions](docs/R12_KEY_ROTATION_WITNESS.md).
+
 ## R11: Per-marker envelope encryption and offline rewrap (synthetic only)
 
 The next optional local security proof creates a **different 256-bit data-encryption key for every synthetic marker**, encrypts the fixed marker under that key using AES-256-GCM, then wraps the DEK with an operator-provisioned 256-bit KEK. Both stages authenticate exact tenant, verified owner, ID and timestamps.

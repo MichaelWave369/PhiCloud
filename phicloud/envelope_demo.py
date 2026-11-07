@@ -18,6 +18,7 @@ import secrets
 from pathlib import Path
 
 from .sealed_demo import read_local_key
+from .envelope_rotation_fence import load_for_database
 from .tenant_store import LocalTenantConfigError, LocalTenantError, LocalTenantCapacity
 
 SCHEMA = "phicloud.local-envelope-canary/0.1"
@@ -79,7 +80,8 @@ def _read_and_verify(row, kek: bytes) -> bytes:
 class EnvelopeDemoStore:
     """Independent bounded table; never upgrade R10 markers in place."""
 
-    def __init__(self, tenant_store, key_path: str | Path):
+    def __init__(self, tenant_store, key_path: str | Path,
+                 rotation_witness_path: str | Path | None = None):
         self._store = tenant_store
         self._kek = read_local_key(key_path, tenant_store.path)
         self.key_id = _key_id(self._kek)
@@ -111,6 +113,10 @@ class EnvelopeDemoStore:
                     " VALUES('envelope_active_kek_id',?)", (self.key_id,))
             elif row[0] != self.key_id:
                 raise LocalTenantConfigError("envelope_active_key_mismatch")
+            # A DB enrolled in the R12 witness cannot silently open with an
+            # old restored key, even if that old key matches the restored DB.
+            load_for_database(
+                tenant_store, rotation_witness_path, kek_path=key_path)
 
     def _actor(self, principal, tenant):
         return (self._store._tenant_id(tenant),
@@ -237,7 +243,9 @@ class EnvelopeDemoStore:
 
 
 def rotate_wrapping_key(tenant_store, old_path: str | Path,
-                        new_path: str | Path) -> dict:
+                        new_path: str | Path, *,
+                        rotation_witness_path: str | Path | None = None,
+                        resume_pending: bool = False) -> dict:
     """Offline atomic KEK rotation: payload ciphertext remains byte-identical.
 
     Both old/new key files must already exist OUTSIDE the SQLite backup dir.
@@ -262,8 +270,20 @@ def rotate_wrapping_key(tenant_store, old_path: str | Path,
             ).fetchone()
             if active is None or active[0] != old_id:
                 raise LocalTenantConfigError("old_wrapping_key_not_active")
+            witness = load_for_database(
+                tenant_store, rotation_witness_path, kek_path=old_path,
+                allow_pending=resume_pending)
+            if resume_pending:
+                if (witness is None or not witness.events
+                        or witness.events[-1] != (old_id, new_id)
+                        or witness.active != new_id):
+                    raise LocalTenantConfigError("no_exact_pending_rotation_to_reconcile")
+            elif witness is not None and witness.active != old_id:
+                raise LocalTenantConfigError("rotation_witness_ahead_recovery_required")
             rows = db.execute(EnvelopeDemoStore._select()).fetchall()
-            count = 0
+            changes = []
+            # Verify ALL old DEK wraps and encrypted canaries before updating
+            # either the independent witness or any SQLite row.
             for row in rows:
                 dek = _read_and_verify(row, old_key)
                 marker_id, tenant, owner, _, _, _, _, created, expires = row
@@ -271,10 +291,19 @@ def rotate_wrapping_key(tenant_store, old_path: str | Path,
                 new_wrapped = AESGCM(new_key).encrypt(
                     new_nonce, dek,
                     _aad("wrap", tenant, owner, marker_id, created, expires))
+                changes.append((new_nonce, new_wrapped, marker_id))
+            if witness is not None and not resume_pending:
+                # Persist the independent no-rollback event FIRST. If SQLite
+                # subsequently fails, startup refuses the mismatched epoch.
+                from .tenant_fence import WitnessError
+                try:
+                    witness.append_rotation(old_id, new_id)
+                except WitnessError as exc:
+                    raise LocalTenantConfigError(str(exc)) from exc
+            for new_nonce, new_wrapped, marker_id in changes:
                 db.execute(
                     "UPDATE envelope_markers SET wrap_nonce=?,wrapped_dek=?"
                     " WHERE id=?", (new_nonce, new_wrapped, marker_id))
-                count += 1
             db.execute(
                 "UPDATE metadata SET value=? WHERE key='envelope_active_kek_id'",
                 (new_id,))
@@ -282,6 +311,7 @@ def rotate_wrapping_key(tenant_store, old_path: str | Path,
         except Exception:
             db.execute("ROLLBACK")
             raise
+        count = len(changes)
     return {
         "schema": "phicloud.local-envelope-rotation/0.1",
         "rewrapped_markers": count,
@@ -303,4 +333,11 @@ def create_envelope_demo(tenant_store, env=None):
     key_path = settings.get("PHICLOUD_ENVELOPE_KEK_PATH")
     if not key_path:
         raise LocalTenantConfigError("independent_wrapping_key_required")
-    return EnvelopeDemoStore(tenant_store, key_path)
+    witness_enabled = settings.get("PHICLOUD_ENABLE_ROTATION_FENCE_DEV") == "1"
+    witness_path = settings.get("PHICLOUD_ENVELOPE_ROTATION_WITNESS_PATH")
+    if witness_path and not witness_enabled:
+        raise LocalTenantConfigError("explicit_rotation_witness_opt_in_required")
+    if witness_enabled and not witness_path:
+        raise LocalTenantConfigError("independent_rotation_witness_required")
+    return EnvelopeDemoStore(tenant_store, key_path,
+                             rotation_witness_path=witness_path if witness_enabled else None)

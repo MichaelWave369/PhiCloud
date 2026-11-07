@@ -125,3 +125,14 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [x] Add Python tests and real two-user Keycloak rotation/ownership test
 - [ ] Confirm all three CI workflows green on current PR head, followed by review and merge
 - [ ] Independently protected key rotation epochs, actual user export/recovery/escrow and production file-encryption requirements remain unimplemented
+
+## R12: Independent KEK rotation epochs and rollback-safe offline reconciliation
+
+- [x] Add separate private JSONL witness in directory distinct from SQLite and KEK backups, one-time DB binding and epoch validation
+- [x] Gate enrolled envelope startup on matching witness even when older KEK matches an older restored database
+- [x] Fsync witnessed rotation before transactional wrapped-DEK changes; fail closed if SQLite commit fails
+- [x] Add offline exact pending-epoch reconciliation, never silently skip/repeat/roll back epochs or recover user content
+- [x] Test stale DB+old KEK, corrupted/missing witness, crash window and no-regrant recovery in Python tests
+- [x] Extend two-real-user Keycloak CI to simulate stale DB+old KEK rollback and exact recovery with owner isolation
+- [ ] Verify all Python, ANC, R3/PhiShield and real Keycloak R6/R9/R10/R11/R12 workflows green on final PR head
+- [ ] Add independently trusted hardware/server monotonic key authority, actual key custody, backup/export/retirement before any PhiVault files
