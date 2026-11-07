@@ -22,12 +22,17 @@ def main(argv=None) -> int:
     parser.add_argument("--old-key", required=True)
     parser.add_argument("--new-key", required=True)
     parser.add_argument("--confirm", required=True)
-    parser.add_argument("--fence", help="Existing independent R9 witness path, if enrolled")
+    parser.add_argument("--fence", help="Existing independent R9 revocation witness, if enrolled")
+    parser.add_argument("--rotation-witness",
+                        help="Independent R12 KEK-epoch witness, required once enrolled")
+    parser.add_argument("--resume-pending", action="store_true",
+                        help="Explicitly finish one witness-ahead rotation after a failed SQLite commit")
     args = parser.parse_args(argv)
     if (os.environ.get("PHICLOUD_ENVELOPE_OPERATOR_DEV") != "1"
             or os.environ.get("NODE_ENV") == "production"
             or os.environ.get("PHICLOUD_ENV") == "production"
-            or args.confirm != "REWRAP SYNTHETIC ENVELOPES"):
+            or args.confirm != ("RECONCILE SYNTHETIC KEY ROTATION" if args.resume_pending
+                                 else "REWRAP SYNTHETIC ENVELOPES")):
         print("DENY: explicit local R11 rotation confirmation required",
               file=sys.stderr)
         return 2
@@ -37,11 +42,14 @@ def main(argv=None) -> int:
             raise LocalTenantConfigError("existing_private_test_database_required")
         store = LocalTenantStore(database, fence_path=args.fence)
         try:
-            result = rotate_wrapping_key(store, args.old_key, args.new_key)
+            result = rotate_wrapping_key(
+                store, args.old_key, args.new_key,
+                rotation_witness_path=args.rotation_witness,
+                resume_pending=args.resume_pending)
         finally:
             store.close()
         # Never echo key material, subject hashes, record IDs or paths.
-        print("R11 synthetic wrapping-key rotation committed; "
+        print("R11/R12 synthetic wrapping-key rotation committed; "
               f"rewrapped_markers={result['rewrapped_markers']}; "
               "payload_reencrypted=false; old_key_deleted=false")
         return 0
