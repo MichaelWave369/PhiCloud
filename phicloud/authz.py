@@ -25,6 +25,9 @@ ISSUER = "http://127.0.0.1:8080/realms/phiid-dev"
 INTROSPECTION_ENDPOINT = ISSUER + "/protocol/openid-connect/token/introspect"
 AUDIENCE = "phicloud-resource-dev"
 REQUIRED_SCOPE = "phicloud.profile.read"
+DEMO_READ_SCOPE = "phicloud.demo.read"
+DEMO_WRITE_SCOPE = "phicloud.demo.write"
+RESOURCE_SCOPES = frozenset({REQUIRED_SCOPE, DEMO_READ_SCOPE, DEMO_WRITE_SCOPE})
 MAX_TOKEN_LENGTH = 4096
 MAX_RESPONSE_BYTES = 16_384
 MAX_CLOCK_SKEW_SECONDS = 0
@@ -83,10 +86,14 @@ def validate_bearer_header(values: list[str] | None) -> str:
     return token
 
 
-def validate_introspection(data: object, *, now: int | None = None) -> AuthorizedPrincipal:
+def validate_introspection(
+    data: object, *, required_scope: str = REQUIRED_SCOPE, now: int | None = None
+) -> AuthorizedPrincipal:
     """Treat every field of the introspection response as untrusted unless
     it came from our authenticated, pinned provider channel.
     """
+    if required_scope not in RESOURCE_SCOPES:
+        raise AuthorizationDenied("unsupported_resource_scope")
     if now is None:
         now = int(time.time())
     if not isinstance(data, dict) or data.get("active") is not True:
@@ -114,10 +121,10 @@ def validate_introspection(data: object, *, now: int | None = None) -> Authorize
     if AUDIENCE not in audiences:
         raise AuthorizationDenied("wrong_resource_audience")
     scopes = data.get("scope")
-    if not isinstance(scopes, str) or REQUIRED_SCOPE not in scopes.split():
+    if not isinstance(scopes, str) or required_scope not in scopes.split():
         raise AuthorizationDenied("required_scope_absent")
     return AuthorizedPrincipal(
-        issuer=ISSUER, sub=sub, scope=REQUIRED_SCOPE, audience=AUDIENCE
+        issuer=ISSUER, sub=sub, scope=required_scope, audience=AUDIENCE
     )
 
 
@@ -171,7 +178,9 @@ class LocalTokenIntrospector:
         self._secret = client_secret
         self._transport = transport
 
-    def authorize(self, token: str) -> AuthorizedPrincipal:
+    def authorize(self, token: str, *, required_scope: str = REQUIRED_SCOPE) -> AuthorizedPrincipal:
+        if required_scope not in RESOURCE_SCOPES:
+            raise AuthorizationDenied("unsupported_resource_scope")
         if not isinstance(token, str) or not 20 <= len(token) <= MAX_TOKEN_LENGTH:
             raise AuthorizationDenied("invalid_bearer_token")
         try:
@@ -182,7 +191,7 @@ class LocalTokenIntrospector:
             raise
         except Exception as exc:
             raise AuthorizationUnavailable("provider_unavailable") from exc
-        return validate_introspection(claims)
+        return validate_introspection(claims, required_scope=required_scope)
 
 
 def create_local_introspector(env: dict | None = None) -> LocalTokenIntrospector | None:

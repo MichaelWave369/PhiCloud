@@ -18,6 +18,8 @@ const ISSUER = 'http://127.0.0.1:8080/realms/phiid-dev';
 const CLOUD = 'http://127.0.0.1:8769';
 const AUDIENCE = 'phicloud-resource-dev';
 const SCOPE = 'phicloud.profile.read';
+const DEMO_READ = 'phicloud.demo.read';
+const DEMO_WRITE = 'phicloud.demo.write';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 if (process.env.PHICLOUD_REAL_E2E !== '1' || process.env.NODE_ENV === 'production') {
@@ -63,16 +65,16 @@ async function addClient(token) {
   return { id, secret: details.value };
 }
 
-async function addOptionalScope(token) {
+async function addOptionalScope(token, scope = SCOPE) {
   const created = await fetchAdmin(token, 'client-scopes', {
     method: 'POST',
     body: JSON.stringify({
-      name:SCOPE, protocol:'openid-connect',
-      description:'Only the read-only local PhiCloud R3 demo profile',
+      name:scope, protocol:'openid-connect',
+      description:'Exact, development-only PhiCloud resource scope: '+scope,
       attributes: {
         'include.in.token.scope': 'true',
         'display.on.consent.screen': 'true',
-        'consent.screen.text': 'Read the local PhiCloud demo profile',
+        'consent.screen.text': 'PhiCloud local test resource: '+scope,
       },
       protocolMappers:[{
         name:'phicloud-audience',
@@ -90,7 +92,7 @@ async function addOptionalScope(token) {
   });
   await assertStatus(created,201,'local profile scope create failed');
   const scopes = await adminList(token,'client-scopes');
-  const match=scopes.find(item=>item.name===SCOPE);
+  const match=scopes.find(item=>item.name===scope);
   assert.ok(match?.id,'new Keycloak scope was not registered');
 
   const clients=await adminList(token,'clients?clientId=phiid-bff-dev');
@@ -134,6 +136,7 @@ async function withPythonServer(secret, fn) {
     env:{
       ...process.env,
       PHICLOUD_ENABLE_OAUTH_DEV:'1',
+      PHICLOUD_ENABLE_OWNER_DEMO:'1',
       PHICLOUD_ENV:'test',
       PHICLOUD_OAUTH_CLIENT_SECRET:secret,
       PYTHONUNBUFFERED:'1',
@@ -159,11 +162,15 @@ async function withPythonServer(secret, fn) {
   }
 }
 
-async function resourceRequest(token, path='/v1/private/profile') {
+async function resourceRequest(token, path='/v1/private/profile', options={}) {
   return fetch(CLOUD+path,{
+    method:options.method||'GET',
     redirect:'manual',
     signal:AbortSignal.timeout(9000),
-    headers: token ? {Authorization:'Bearer '+token} : {},
+    headers:{
+      ...(token ? {Authorization:'Bearer '+token} : {}),
+      ...(options.action ? {'X-PhiCloud-Action':options.action} : {}),
+    },
   });
 }
 
@@ -187,7 +194,59 @@ function checkInternalShield(token, secret, expected, consentFixture = true) {
     'local PhiShield must derive identity from Keycloak and honor independent consent');
 }
 
-async function exercise(admin, user, secret) {
+// Both principals have REAL valid Keycloak bearer tokens with identical
+// resource scopes. Access is still restricted by backend (issuer, sub) owner.
+async function exerciseOwnerIsolation(alice, bob, profileOnlyToken) {
+  const callback='http://127.0.0.1:8786/auth/callback';
+  const bothScopes='openid profile '+DEMO_READ+' '+DEMO_WRITE;
+  console.log('R4: two real Keycloak users, same demo read/write scopes');
+  const aliceToken=await exchangeUserToken('phiid-bff-dev',callback,bothScopes,alice);
+  const bobToken=await exchangeUserToken('phiid-bff-dev',callback,bothScopes,bob);
+
+  assert.equal((await resourceRequest(null,'/v1/private/demo-records')).status,401);
+  assert.equal((await resourceRequest(profileOnlyToken,'/v1/private/demo-records')).status,401);
+  const createdA=await resourceRequest(aliceToken,'/v1/private/demo-records',
+    {method:'POST',action:'create-demo-record'});
+  assert.equal(createdA.status,201,'Alice cannot create her local demo record');
+  const a=await createdA.json();
+  const createdB=await resourceRequest(bobToken,'/v1/private/demo-records',
+    {method:'POST',action:'create-demo-record'});
+  assert.equal(createdB.status,201,'Bob cannot create his local demo record');
+  const b=await createdB.json();
+  assert.notEqual(a.id,b.id);
+  assert.equal(a.owner_isolated,true);
+  assert.equal(a.persistent,false);
+  assert.equal(a.cloud_storage_access,false);
+  assert.equal(Object.hasOwn(a,'sub'),false);
+  assert.equal(Object.hasOwn(a,'issuer'),false);
+  assert.equal((await resourceRequest(aliceToken,'/v1/private/demo-records/'+a.id)).status,200);
+  assert.equal((await resourceRequest(bobToken,'/v1/private/demo-records/'+b.id)).status,200);
+  assert.equal((await resourceRequest(bobToken,'/v1/private/demo-records/'+a.id)).status,404);
+  assert.equal((await resourceRequest(aliceToken,'/v1/private/demo-records/'+b.id)).status,404);
+  assert.equal((await resourceRequest(bobToken,'/v1/private/demo-records/'+a.id,
+    {method:'DELETE',action:'delete-demo-record'})).status,404);
+  const listA=await (await resourceRequest(aliceToken,'/v1/private/demo-records')).json();
+  const listB=await (await resourceRequest(bobToken,'/v1/private/demo-records')).json();
+  assert.deepEqual(listA.records.map(x=>x.id),[a.id]);
+  assert.deepEqual(listB.records.map(x=>x.id),[b.id]);
+  assert.equal((await resourceRequest(aliceToken,'/v1/private/demo-records',
+    {method:'POST'})).status,403);
+
+  console.log('R4: independent real access tokens prove read/write scope separation');
+  const readOnly=await exchangeUserToken('phiid-bff-dev',callback,
+    'openid profile '+DEMO_READ,alice);
+  const writeOnly=await exchangeUserToken('phiid-bff-dev',callback,
+    'openid profile '+DEMO_WRITE,alice);
+  assert.equal((await resourceRequest(readOnly,'/v1/private/demo-records')).status,200);
+  assert.equal((await resourceRequest(readOnly,'/v1/private/demo-records',
+    {method:'POST',action:'create-demo-record'})).status,401);
+  assert.equal((await resourceRequest(writeOnly,'/v1/private/demo-records')).status,401);
+  assert.equal((await resourceRequest(writeOnly,'/v1/private/demo-records',
+    {method:'POST',action:'create-demo-record'})).status,201);
+  return {aliceToken,bobToken,aliceId:a.id,bobId:b.id};
+}
+
+async function exercise(admin, user, bob, secret) {
   await withPythonServer(secret, async()=>{
     const start=await resourceRequest(null);
     assert.equal(start.status,401,'private route must reject unauthenticated access');
@@ -225,13 +284,27 @@ async function exercise(admin, user, secret) {
     checkInternalShield(mailToken, secret, 'DENY', true);
     assert.equal((await resourceRequest('not-a-real-token-with-any-permissions')).status,401);
 
-    console.log('R3: revoke upstream user session and require fresh introspection');
+    const owners=await exerciseOwnerIsolation(user,bob,valid);
+
+    console.log("R3/R4: revoke Alice's Keycloak session; Bob must retain own records");
     const logout=await fetchAdmin(admin,'users/'+user.userId+'/logout',{method:'POST'});
     await assertStatus(logout,204,'Keycloak test user logout failed');
     // Keycloak token introspection must reflect session invalidation. No cache.
     const after=await resourceRequest(valid);
     assert.equal(after.status,401,'revoked real user token was accepted after Keycloak logout');
     checkInternalShield(valid, secret, 'DENY', true);
+    assert.equal((await resourceRequest(owners.aliceToken,
+      '/v1/private/demo-records/'+owners.aliceId)).status,401,
+      'Alice revoked token remained valid for owner record');
+    assert.equal((await resourceRequest(owners.bobToken,
+      '/v1/private/demo-records/'+owners.bobId)).status,200,
+      'Alice logout incorrectly revoked Bob independent token');
+    assert.equal((await resourceRequest(owners.bobToken,
+      '/v1/private/demo-records/'+owners.aliceId)).status,404);
+    assert.equal((await resourceRequest(owners.bobToken,
+      '/v1/private/demo-records/'+owners.bobId,
+      {method:'DELETE',action:'delete-demo-record'})).status,200);
+    console.log('PASS: real two-subject scope/owner separation, denied cross-owner read/write and independent revocation');
     console.log('PASS: genuine Keycloak token allowed only intended PhiCloud read scope, revoked session denied');
     console.log('PASS: R4 PhiShield internal integration requires real active subject, exact scope and independent consent fixture');
     console.log('BOUNDARY: no cloud data, file I/O, Gmail or PhiOS operations performed');
@@ -243,19 +316,24 @@ async function main(){
   await fixture.waitForKeycloak();
   console.log('R3: obtaining local test administrator credential');
   const admin=await fixture.adminToken();
-  let user;
+  let user, bob;
   try{
     console.log('R3: registering temporary confidential resource client');
     const resource=await addClient(admin);
     console.log('R3: configuring explicit local audience and optional scope');
-    await addOptionalScope(admin);
-    console.log('R3: creating disposable non-admin test identity');
+    for (const scope of [SCOPE,DEMO_READ,DEMO_WRITE]) {
+      await addOptionalScope(admin,scope);
+    }
+    console.log('R3/R4: creating two disposable non-admin test identities');
     user=await fixture.createDisposableUser(admin);
-    await exercise(admin,user,resource.secret);
+    bob=await fixture.createDisposableUser(admin);
+    await exercise(admin,user,bob,resource.secret);
   } finally{
-    if(user?.userId) {
-      const deleted=await fetchAdmin(admin,'users/'+user.userId,{method:'DELETE'});
-      assert.equal(deleted.status,204,'disposable user cleanup failed');
+    for(const account of [bob,user]) {
+      if(account?.userId) {
+        const deleted=await fetchAdmin(admin,'users/'+account.userId,{method:'DELETE'});
+        assert.equal(deleted.status,204,'disposable user cleanup failed');
+      }
     }
   }
 }
