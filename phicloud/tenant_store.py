@@ -322,6 +322,7 @@ class LocalTenantStore:
                         "DELETE FROM records"
                         " WHERE tenant_id=? AND owner_key=?",
                         (tenant, key)).rowcount
+                    self._purge_sealed_for_member(tenant, key)
                     if (tenant, key) not in database:
                         self._db.execute(
                             "INSERT INTO membership_revocations"
@@ -487,6 +488,7 @@ class LocalTenantStore:
                 removed = self._db.execute(
                     "DELETE FROM records WHERE tenant_id=? AND owner_key=?",
                     (tenant_id, key)).rowcount
+                self._purge_sealed_for_member(tenant_id, key)
                 self._db.execute(
                     "DELETE FROM memberships WHERE tenant_id=? AND principal_key=?",
                     (tenant_id, key))
@@ -506,6 +508,20 @@ class LocalTenantStore:
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
+
+    def _purge_sealed_for_member(self, tenant_id: str, key: str) -> int:
+        # R10 table exists ONLY after explicit encrypted-demo enrollment.
+        # R8 offline revocation must purge its ciphertext even if the demo
+        # flag is OFF for the operator or a restored DB is being reconciled.
+        has_table = self._db.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='sealed_markers'").fetchone()
+        if not has_table:
+            return 0
+        return self._db.execute(
+            "DELETE FROM sealed_markers WHERE tenant_id=? AND owner_key=?",
+            (tenant_id, key)
+        ).rowcount
 
     def _require_member(self, tenant_id: str, key: str) -> None:
         if self._fence is not None and (tenant_id, key) in self._fence.records:
