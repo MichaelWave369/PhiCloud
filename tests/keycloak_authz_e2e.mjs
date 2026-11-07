@@ -27,17 +27,6 @@ if (!process.env.KC_BOOTSTRAP_ADMIN_PASSWORD || !process.env.KC_BOOTSTRAP_ADMIN_
   throw new Error('ephemeral admin credentials required');
 }
 
-function randomSecret() {
-  // Node's crypto.randomBytes; never print or commit generated keys.
-  return cryptoRandom(32);
-}
-function cryptoRandom(bytes) {
-  const array = new Uint8Array(bytes);
-  // Use approved native crypto rather than inventing random/password logic.
-  return randomBytes(bytes).toString('base64url');
-}
-import { randomBytes } from 'node:crypto';
-
 async function assertStatus(response, code, summary) {
   assert.equal(response.status, code, summary);
 }
@@ -222,12 +211,17 @@ async function exercise(admin, user, secret) {
 }
 
 async function main(){
+  console.log('R3: waiting for real disposable Keycloak');
   await fixture.waitForKeycloak();
+  console.log('R3: obtaining local test administrator credential');
   const admin=await fixture.adminToken();
   let user;
   try{
+    console.log('R3: registering temporary confidential resource client');
     const resource=await addClient(admin);
+    console.log('R3: configuring explicit local audience and optional scope');
     await addOptionalScope(admin);
+    console.log('R3: creating disposable non-admin test identity');
     user=await fixture.createDisposableUser(admin);
     await exercise(admin,user,resource.secret);
   } finally{
@@ -238,9 +232,16 @@ async function main(){
   }
 }
 
-await main().catch(error=>{
+// Node's fetch and AbortSignal.timeout can be unref'ed during early Docker
+// startup. Keep the event loop alive until the bounded smoke test settles.
+const liveLoop = setInterval(() => {}, 1000);
+try {
+  await main();
+} catch (error) {
   // Never print raw OAuth callback URLs or token/credential-bearing errors.
   console.error('PhiCloud R3 real-provider smoke failed:',error?.name||'Error',
     error?.name==='AssertionError' ? 'contract assertion not met' : 'local integration unavailable');
   process.exitCode=1;
-});
+} finally {
+  clearInterval(liveLoop);
+}
