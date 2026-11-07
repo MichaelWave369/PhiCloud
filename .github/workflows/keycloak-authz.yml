@@ -77,4 +77,7 @@ jobs:
 
       - name: Stop disposable Keycloak regardless of test result
         if: always()
-        run: docker compose -f integration/phiid/dev/keycloak/compose.yaml down --remove-orphans
+        run: |
+          export KC_BOOTSTRAP_ADMIN_USERNAME="${KC_BOOTSTRAP_ADMIN_USERNAME:-cleanup-only}"
+          export KC_BOOTSTRAP_ADMIN_PASSWORD="${KC_BOOTSTRAP_ADMIN_PASSWORD:-no-bootstrap-used}"
+          docker compose -f integration/phiid/dev/keycloak/compose.yaml down --remove-orphans

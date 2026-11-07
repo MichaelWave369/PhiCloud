@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -12,13 +13,15 @@ from .registry import ManifestError, load_manifest
 from .authz import (
     AuthorizationDenied, AuthorizationUnavailable,
     create_local_introspector, validate_bearer_header,
+    DEMO_READ_SCOPE, DEMO_WRITE_SCOPE,
 )
+from .owner_demo import DemoStoreFull, OwnerDemoStore, SCHEMA as OWNER_SCHEMA
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parent.parent / "config" / "services.json"
 LOOPBACK = "127.0.0.1"
 
 
-def make_handler(manifest: dict, authorizer=None):
+def make_handler(manifest: dict, authorizer=None, owner_store=None):
     """Factory returns a request handler with a validated, immutable startup snapshot."""
     snapshot = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -45,8 +48,119 @@ def make_handler(manifest: dict, authorizer=None):
                 self._reply(200, snapshot)
             elif requested.path == "/v1/private/profile" and authorizer is not None:
                 self._private_profile()
+            elif (owner_store is not None and
+                  (requested.path == "/v1/private/demo-records" or
+                   requested.path.startswith("/v1/private/demo-records/"))):
+                self._demo_read(requested.path)
             else:
                 self._reply(404, b'{"error":"not_found"}')
+
+        def do_POST(self) -> None:  # noqa: N802
+            requested = urlsplit(self.path)
+            if (owner_store is None or requested.query or requested.fragment or
+                requested.path != "/v1/private/demo-records"):
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            self._demo_mutation("create", None)
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            requested = urlsplit(self.path)
+            prefix = "/v1/private/demo-records/"
+            if (owner_store is None or requested.query or requested.fragment or
+                not requested.path.startswith(prefix)):
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            self._demo_mutation("delete", requested.path[len(prefix):])
+
+        def _require_local(self) -> bool:
+            peer = self.client_address[0]
+            hosts = self.headers.get_all("Host", [])
+            expected_host = f"{LOOPBACK}:{self.server.server_port}"
+            if peer != LOOPBACK or len(hosts) != 1 or hosts[0] != expected_host:
+                self._reply(403, b'{"error":"local_host_required"}')
+                return False
+            if self.headers.get("Sec-Fetch-Site") == "cross-site":
+                self._reply(403, b'{"error":"cross_site_access_denied"}')
+                return False
+            return True
+
+        def _authorize_demo(self, scope: str):
+            try:
+                token = validate_bearer_header(self.headers.get_all("Authorization"))
+                return authorizer.authorize(token, required_scope=scope)
+            except AuthorizationDenied:
+                self._reply(401, b'{"error":"invalid_or_insufficient_access_token"}')
+            except AuthorizationUnavailable:
+                self._reply(503, b'{"error":"identity_provider_unavailable"}')
+            except Exception:
+                self._reply(503, b'{"error":"authorization_unavailable"}')
+            return None
+
+        def _demo_read(self, path: str) -> None:
+            if not self._require_local():
+                return
+            principal = self._authorize_demo(DEMO_READ_SCOPE)
+            if principal is None:
+                return
+            prefix = "/v1/private/demo-records"
+            try:
+                if path == prefix:
+                    records = owner_store.list_own(principal)
+                    self._reply(200, json.dumps({
+                        "schema": OWNER_SCHEMA, "persistent": False,
+                        "owner_isolation_enforced": True, "records": records,
+                    }, separators=(",", ":")).encode("utf-8"))
+                elif path.startswith(prefix + "/"):
+                    record = owner_store.read_own(principal, path[len(prefix) + 1:])
+                    if record is None:
+                        self._reply(404, b'{"error":"not_found"}')
+                        return
+                    self._reply(200, json.dumps(record, separators=(",", ":")).encode("utf-8"))
+                else:
+                    self._reply(404, b'{"error":"not_found"}')
+            except Exception:
+                self._reply(503, b'{"error":"local_demo_unavailable"}')
+
+        def _demo_mutation(self, action: str, record_id: str | None) -> None:
+            if not self._require_local():
+                return
+            expected_action = ("create-demo-record" if action == "create"
+                               else "delete-demo-record")
+            origin = self.headers.get_all("Origin", [])
+            expected_origin = f"http://{LOOPBACK}:{self.server.server_port}"
+            if (len(origin) > 1 or (origin and origin != [expected_origin]) or
+                self.headers.get_all("X-PhiCloud-Action", []) != [expected_action]):
+                self._reply(403, b'{"error":"explicit_local_action_required"}')
+                return
+            # These routes accept NO caller-controlled payload or owner field.
+            # Reject transfer encoding, body and media type, rather than
+            # accidentally leaving unread bytes on a keepalive connection.
+            length = self.headers.get_all("Content-Length", [])
+            if (self.headers.get_all("Transfer-Encoding") or
+                len(length) > 1 or (length and length != ["0"]) or
+                self.headers.get_all("Content-Type")):
+                self._reply(413, b'{"error":"body_not_accepted"}')
+                self.close_connection = True
+                return
+            principal = self._authorize_demo(DEMO_WRITE_SCOPE)
+            if principal is None:
+                return
+            try:
+                if action == "create":
+                    record = owner_store.create(principal)
+                    self._reply(201, json.dumps(record, separators=(",", ":")).encode("utf-8"))
+                elif action == "delete":
+                    removed = owner_store.delete_own(principal, record_id or "")
+                    if not removed:
+                        self._reply(404, b'{"error":"not_found"}')
+                    else:
+                        self._reply(200, b'{"deleted":true,"persistent":false}')
+                else:
+                    self._reply(404, b'{"error":"not_found"}')
+            except DemoStoreFull:
+                self._reply(429, b'{"error":"local_demo_capacity"}')
+            except Exception:
+                self._reply(503, b'{"error":"local_demo_unavailable"}')
 
         def _private_profile(self) -> None:
             """One read-only resource: actual server-side introspection each time.
@@ -106,9 +220,15 @@ def main(argv: list[str] | None = None) -> int:
         authorizer = create_local_introspector()
     except ValueError as exc:
         parser.error(str(exc))
-    with ThreadingHTTPServer((LOOPBACK, args.port), make_handler(manifest, authorizer)) as server:
+    demo_requested = os.environ.get("PHICLOUD_ENABLE_OWNER_DEMO") == "1"
+    if demo_requested and authorizer is None:
+        parser.error("owner_demo_requires_explicit_oauth_gate")
+    owner_store = OwnerDemoStore() if demo_requested else None
+    with ThreadingHTTPServer((LOOPBACK, args.port),
+                             make_handler(manifest, authorizer, owner_store)) as server:
         print(f"PhiCloud R0: http://{LOOPBACK}:{args.port}/v1/services (declarative only)")
         print("Local R3 OAuth test route enabled" if authorizer else "R3 OAuth test route disabled")
+        print("R4 ephemeral owner isolation demo enabled" if owner_store else "R4 owner demo disabled")
         print("No hosted accounts, mail delivery, remote service discovery or cloud storage.")
         try:
             server.serve_forever()
