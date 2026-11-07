@@ -114,3 +114,14 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [x] Add unit/HTTP tests and extend real two-user Keycloak CI to cover restart with independent key
 - [ ] Confirm full Python matrix, ANC/PhiShield and two actual Keycloak workflow checks are green
 - [ ] Design actual data-key envelope encryption, independent recovery/rotation, export and trustworthy backup policy before real files
+
+## R11: Per-record DEK envelope wrapping and offline key rotation (synthetic only)
+
+- [x] Give each new fixed synthetic marker its own random 256-bit DEK; AES-GCM encrypt payload and independently wrap each DEK under an operator-only KEK
+- [x] Bind schema, tenant, owner, ID, timestamps and distinct payload/wrap domains as authenticated data, with random independent nonces
+- [x] Add exact `phicloud.envelope.read/write` token scopes and membership/ownership enforcement with no supplied payload
+- [x] Provide offline operator rewrap with exclusive SQLite lease, atomic all-record key rotation and unchanged encrypted payload bytes
+- [x] Purge wrapped DEKs from revoked tenants during R8/R9 SQL transactions
+- [x] Add Python tests and real two-user Keycloak rotation/ownership test
+- [ ] Confirm all three CI workflows green on current PR head, followed by review and merge
+- [ ] Independently protected key rotation epochs, actual user export/recovery/escrow and production file-encryption requirements remain unimplemented
