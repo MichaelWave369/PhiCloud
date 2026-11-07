@@ -26,6 +26,7 @@ from .authz import (
 )
 from .shield_policy import ConsentEvidence, EffectRequest, PolicyVerdict, _utc, _valid_request
 from .local_consent import LocalOwnerConsentPolicy, PolicyDenied, ReviewTicket
+from .durable_consent import DurableOwnerConsentPolicy
 from .shield_transport import (
     LocalReplayCache,
     evaluate_authenticated_candidate,
@@ -131,12 +132,15 @@ def evaluate_verified_profile_candidate(
     )
 
 
+OwnerConsentPolicy = LocalOwnerConsentPolicy | DurableOwnerConsentPolicy
+
+
 def stage_verified_profile_review(
     token: str,
     *,
     request_id: str,
     introspector: LocalTokenIntrospector,
-    policy: LocalOwnerConsentPolicy,
+    policy: OwnerConsentPolicy,
     now: datetime | None = None,
 ) -> ReviewTicket:
     """Begin a human-reviewable request from freshly verified identity.
@@ -144,7 +148,7 @@ def stage_verified_profile_review(
     This does NOT approve the request. Only a trusted local review step may
     call policy.approve(), ideally through operator_console_review().
     """
-    if type(policy) is not LocalOwnerConsentPolicy:
+    if type(policy) not in (LocalOwnerConsentPolicy, DurableOwnerConsentPolicy):
         raise PolicyDenied("trusted local policy required")
     request = verified_profile_request(
         token, introspector=introspector, request_id=request_id
@@ -160,20 +164,20 @@ def evaluate_reviewed_profile_candidate(
     *,
     request_id: str,
     introspector: LocalTokenIntrospector,
-    policy: LocalOwnerConsentPolicy,
+    policy: OwnerConsentPolicy,
     envelope: object,
     trusted_keys: Mapping[tuple[str, str], bytes],
     replay_cache: LocalReplayCache,
     now: datetime | None = None,
 ) -> PolicyVerdict:
-    """R5: actual ledger lookup/atomic consumption, no caller consent callback.
+    """R5/R6: actual ledger lookup/atomic consumption, no caller consent callback.
 
     Non-authoritative CANDIDATE is the most positive possible result.
     Existing R4 consent fixture helper is preserved for compatibility but
     R5 never accepts a boolean or fabricated client ConsentEvidence.
     """
     instant = _utc(now if now is not None else datetime.now(timezone.utc))
-    if type(policy) is not LocalOwnerConsentPolicy:
+    if type(policy) not in (LocalOwnerConsentPolicy, DurableOwnerConsentPolicy):
         return PolicyVerdict("DENY", "trusted owner-consent policy required")
     try:
         request = verified_profile_request(
