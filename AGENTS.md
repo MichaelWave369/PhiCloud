@@ -61,6 +61,14 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Never log raw OIDC subjects, credentials, bearer tokens, private file locations, or raw witness entries. No real cloud files, production backups, mailbox data, personal information, or PhiOS effects in this fixture.
 - A witness-only rollback guard is insufficient for multi-node deployments, backup integrity, encryption, adversarial host tampering or production account restoration. Those require independently protected recovery design and review.
 
+## R12 deferred operator review safety
+
+- A longer operator preview may contain **only unsigned, pending** synthetic `profile.read` requests already derived from fresh trusted PhiID introspection. No browser payload may determine the owner, action, resource or operator key.
+- Do not extend the R7 30-second Ed25519 signature lifetime to solve UI latency. Obtain a newly issued short-lived signature only after local explicit review; validate it against the existing pinned public key before issuing the R9 WebAuthn challenge.
+- Keep all R7 private signing keys outside PhiCloud and the browser; no mock signer from tests may be copied into runtime. The Unix socket client must enforce owner-private paths and Linux peer credentials. A same-UID socket by itself does **not** prove a human or an independent security principal.
+- Missing/unavailable signer, invalid signature, revoked owner/signer/credential, expired preview and duplicate signing attempts must fail closed and burn the review; never drop back to R6/R7 unsigned acknowledgment.
+- Preserve fresh PhiID and ANC risk checks plus independent PhiOS effect approval. No signed+UV review authorizes real resources, cloud services or local OS actions.
+
 ## R10 encrypted synthetic marker security invariants
 
 - R10 is a **disabled-by-default synthetic canary only**. Never accept user-provided plaintext, file paths, mail, PhiVault data, credentials, OAuth tokens, wallet or PhiOS device effects through these endpoints.
