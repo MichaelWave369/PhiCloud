@@ -191,6 +191,28 @@ authenticator output. Actual browser/passkey hardware compatibility
 requires manual validation. Real user identity binding and a
 human-facing exact-action approval ceremony are future work.
 
+## R11: exact-action local signed + WebAuthn approval screen (prototype)
+
+The [R11 signed review ceremony](docs/R11_LOCAL_SIGNED_REVIEW.md)
+adds a localhost-only review page to display **all seven fields of
+a previously staged, independently R7-signed synthetic profile request**.
+It requires one-time terminal pairing, deliberate confirmation,
+and an actual WebAuthn authentication assertion from an already
+R10-enrolled credential. The signed receipt and private R7 key
+never enter the browser.
+
+R11 records a short-lived approval only; it cannot read real
+resources, issue cloud permissions or perform PhiOS effects.
+Legacy R6/R7 callers cannot downgrade an already challenged
+WebAuthn review, and revoked credentials remain disqualifying even
+through old signed-only consumer calls.
+
+This is still an **opt-in POSIX/localhost development prototype**,
+not a fully authenticated signer, production browser deployment,
+or real-world proof of human intent. R7's short signature TTL
+makes timely review a known limitation. The existing PhiOS
+offline and PhiShield execution boundaries remain unchanged.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
