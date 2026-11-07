@@ -40,6 +40,16 @@ See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contra
 
 PhiID and PhiMail now share a **local development OIDC issuer** through independent clients. PhiCloud still exposes **no identity gateway or mail API**; see [R2 verified-identity boundary](docs/PHIMAIL_IDENTITY_R2.md).
 
+## R3: Protected localhost demo resource via real Keycloak tokens
+
+The optional **PhiCloud R3 resource-server gate** validates a real OAuth 2.0 access token through Keycloak confidential-client introspection on fixed IPv4 loopback. It checks `active`, exact issuer, `aud=phicloud-resource-dev`, `scope=phicloud.profile.read`, expiry and subject on **every** request. A disabled or revoked token fails closed, and arbitrary PhiID display exports or consent receipts never grant access.
+
+The new `/v1/private/profile` route returns only a pseudonymous, *synthetic local test profile* with explicit `cloud_storage_access:false`, `mailbox_access:false`, and `phios_effect_authority:false`. The existing public `/v1/services` registry remains unchanged.
+
+**Disabled by default**. Requires `PHICLOUD_ENABLE_OAUTH_DEV=1` and a private `PHICLOUD_OAUTH_CLIENT_SECRET` for a dedicated confidential Keycloak development client. No hosted login, file storage, authorization for real resources or production deployment is implemented.
+
+See [R3 scope, setup, real-provider CI and limitations](docs/R3_LOCAL_OAUTH_GATE.md).
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
@@ -54,7 +64,7 @@ curl http://127.0.0.1:8769/healthz
 curl http://127.0.0.1:8769/v1/services
 ```
 
-The server always binds to `127.0.0.1`; it has no account, mailbox, remote request or mutating API. `/healthz` checks **only the registry process**, not whether any service is online. Service stage values are planning/integration labels, not observations. Do not expose this unauthenticated prototype directly to the internet.
+The server always binds to `127.0.0.1`; its default public registry has no account, mailbox, remote request or mutating API. The optional R3 profile test endpoint performs fresh localhost-only OAuth introspection and is disabled unless explicitly configured. `/healthz` checks **only the registry process**, not whether any service is online. Service stage values are planning/integration labels, not observations. Do not expose this unauthenticated prototype directly to the internet.
 
 ## PhiShield R0: local ANC-linked policy candidate (prototype)
 
