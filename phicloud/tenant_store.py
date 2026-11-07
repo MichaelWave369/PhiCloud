@@ -267,6 +267,12 @@ class LocalTenantStore:
         existing = self._db.execute(
             "SELECT tenant_id,principal_key,revoked_at FROM membership_revocations"
             " ORDER BY tenant_id,principal_key").fetchall()
+        # Validate obvious invalid destination before writing the irreversible
+        # SQLite enrollment marker. O_EXCL protects the subsequent file create.
+        try:
+            RevocationWitness.preflight_enrollment(fence_path, self.path)
+        except WitnessError as exc:
+            raise LocalTenantConfigError(str(exc)) from exc
         new_id = secrets.token_hex(32)
         with self._lock:
             # Bind the DB first: if file creation fails, subsequent server
