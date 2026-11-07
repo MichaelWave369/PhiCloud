@@ -268,7 +268,7 @@ def handler_factory(ceremony: LocalOperatorApproval):
     files={
         "/":("operator_approve.html","text/html"),
         "/operator_approve.js":("operator_approve.js","application/javascript"),
-        "/operator_approve.css":("operator_enroll.css","text/css"),
+        "/operator_approve.css":("operator_approve.css","text/css"),
     }
 
     class Handler(BaseHTTPRequestHandler):
