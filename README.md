@@ -134,6 +134,27 @@ rung remains POSIX/local development only, with synthetic signatures
 in CI and **no verified human signing ceremony**, hosted approval
 service, real data permissions or native Windows ACL support.
 
+## R9: WebAuthn user-verification gate for operator review (prototype)
+
+The [R9 WebAuthn step-up](docs/R9_WEBAUTHN_OPERATOR_STEPUP.md) adds a
+separate local **user-verified** path on top of R7's exact-action
+Ed25519-signed review. A trusted local process may enroll a previously
+verified WebAuthn public credential, issue one receipt-bound challenge,
+and verify the authenticator's signature, RP/origin, user presence,
+user-verification flag, and replay counter using pinned `webauthn`.
+
+The private SQLite ledger preserves challenge/review state and credential
+revocation. Revoking an operator credential or R7 signing key cancels its
+outstanding reviews. Existing signed-only approvals are never relabeled
+as user-verified. Success remains **non-authoritative `CANDIDATE`**.
+
+**Not a live passkey experience:** There is no real registration
+ceremony, hardware-backed user enrollment, browser UI, public API, or
+device permission. CI uses genuine cryptographic WebAuthn syntax from
+a synthetic authenticator and a real disposable Keycloak identity.
+The origin is fixed to localhost for development only, and the
+operator backend remains POSIX-only.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.

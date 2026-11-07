@@ -296,7 +296,7 @@ class SignedOperatorApprovalTests(unittest.TestCase):
             )
 
     def test_r6_database_schema_migrates_without_losing_unsigned_approvals(self):
-        """V1 existing owner/request records are preserved, not relabeled signed."""
+        """V1 existing owner/request records migrate through R7/R9, not relabeled."""
         legacy=self.folder/"legacy.sqlite3"
         old=EffectRequest(
             request_id="r6-legacy-approval",scope="pre_service",
@@ -337,7 +337,7 @@ class SignedOperatorApprovalTests(unittest.TestCase):
         legacy.chmod(0o600)
         migrated=DurableOwnerConsentPolicy(legacy)
         with sqlite3.connect(legacy) as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0],2)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0],3)
             self.assertIn("signed_receipt",{
                 r[1] for r in conn.execute("PRAGMA table_info(requests)")
             })

@@ -309,6 +309,27 @@ function checkR7SignedOperator(token, secret, expected, mode = 'good') {
     'R7 must verify real identity and revocable Ed25519 operator evidence');
 }
 
+function checkR9UserVerifiedReview(token, secret, expected, mode='uv') {
+  // Genuine disposable Keycloak access token and SYNTHETIC FIDO authenticator.
+  // Never place any credential, token or secret in process arguments or logs.
+  const result = spawnSync('python', ['tests/webauthn_stepup_e2e.py'], {
+    env: {
+      ...process.env,
+      PHICLOUD_OAUTH_CLIENT_SECRET: secret,
+      PHICLOUD_R9_WEBAUTHN_MODE: mode,
+      PHICLOUD_REAL_E2E: '1',
+      NODE_ENV: 'test',
+      PYTHONPATH: '.',
+    },
+    input: token,
+    encoding: 'utf8',
+    timeout: 12000,
+  });
+  assert.equal(result.status, 0, 'R9 WebAuthn user-verification smoke unavailable');
+  assert.equal(result.stdout.trim(), expected,
+    'R9 must require a live verified subject plus signed WebAuthn UV approval');
+}
+
 async function exercise(admin, user, bob, secret) {
   await withPythonServer(secret, async()=>{
     const start=await resourceRequest(null);
@@ -344,6 +365,12 @@ async function exercise(admin, user, bob, secret) {
     checkR7SignedOperator(valid, secret, 'DENY', 'wrong-signature');
     checkR7SignedOperator(valid, secret, 'DENY', 'unsigned');
     checkR7SignedOperator(valid, secret, 'DENY', 'revoke-key');
+    console.log('R9: synthetic WebAuthn UV + signed receipt on genuine Keycloak access token');
+    checkR9UserVerifiedReview(valid, secret, 'CANDIDATE', 'uv');
+    checkR9UserVerifiedReview(valid, secret, 'DENY', 'no-uv');
+    checkR9UserVerifiedReview(valid, secret, 'DENY', 'revoke-credential');
+    checkR9UserVerifiedReview(valid, secret, 'DENY', 'revoke-signer');
+    checkR9UserVerifiedReview(valid, secret, 'DENY', 'unsigned');
 
     console.log('R3: wrong scope, wrong audience and ID-only flows denied');
     const noScope=await exchangeUserToken('phiid-bff-dev',
@@ -354,6 +381,7 @@ async function exercise(admin, user, bob, secret) {
     checkR5OwnerReview(noScope, secret, 'DENY', 'approve');
     checkR6DurableReview(noScope, secret, 'DENY', 'approve');
     checkR7SignedOperator(noScope, secret, 'DENY', 'good');
+    checkR9UserVerifiedReview(noScope, secret, 'DENY', 'uv');
 
     const mailToken=await exchangeUserToken('phimail-bff-dev',
       'http://127.0.0.1:5173/auth/phiid/callback','openid profile',user);
@@ -363,6 +391,7 @@ async function exercise(admin, user, bob, secret) {
     checkR5OwnerReview(mailToken, secret, 'DENY', 'approve');
     checkR6DurableReview(mailToken, secret, 'DENY', 'approve');
     checkR7SignedOperator(mailToken, secret, 'DENY', 'good');
+    checkR9UserVerifiedReview(mailToken, secret, 'DENY', 'uv');
     assert.equal((await resourceRequest('not-a-real-token-with-any-permissions')).status,401);
 
     const owners=await exerciseOwnerIsolation(user,bob,valid);
@@ -377,6 +406,7 @@ async function exercise(admin, user, bob, secret) {
     checkR5OwnerReview(valid, secret, 'DENY', 'approve');
     checkR6DurableReview(valid, secret, 'DENY', 'approve');
     checkR7SignedOperator(valid, secret, 'DENY', 'good');
+    checkR9UserVerifiedReview(valid, secret, 'DENY', 'uv');
     assert.equal((await resourceRequest(owners.aliceToken,
       '/v1/private/demo-records/'+owners.aliceId)).status,401,
       'Alice revoked token remained valid for owner record');
@@ -394,6 +424,7 @@ async function exercise(admin, user, bob, secret) {
     console.log('PASS: R5 one-use owner review requires active Keycloak identity and exact simulated approval');
     console.log('PASS: R6 SQLite approval/revocation survives restart and requires active Keycloak identity');
     console.log('PASS: R7 independent Ed25519 verifier rejects untrusted, revoked, unsigned and replayed operator review');
+    console.log('PASS: R9 exact signed review plus WebAuthn UV verified for real Keycloak subject with revoked/invalid denial');
     console.log('BOUNDARY: no cloud data, file I/O, Gmail or PhiOS operations performed');
   });
 }

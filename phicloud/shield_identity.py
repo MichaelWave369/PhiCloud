@@ -231,3 +231,42 @@ def evaluate_signed_profile_candidate(
         trusted_keys=trusted_keys, replay_cache=replay_cache,
         authority=authority, consent=consent, now=instant,
     )
+
+
+def evaluate_user_verified_profile_candidate(
+    token: str,
+    *,
+    request_id: str,
+    introspector: LocalTokenIntrospector,
+    policy: DurableOwnerConsentPolicy,
+    envelope: object,
+    trusted_keys: Mapping[tuple[str, str], bytes],
+    replay_cache: LocalReplayCache,
+    now: datetime | None = None,
+) -> PolicyVerdict:
+    """R9: exact R7 signature AND enrolled WebAuthn user verification.
+
+    A real RP/WebAuthn credential must first be enrolled under an
+    independently authenticated operator. A successful answer is still
+    a non-authoritative policy CANDIDATE, NOT an OS execution grant.
+    """
+    instant = _utc(now if now is not None else datetime.now(timezone.utc))
+    if type(policy) is not DurableOwnerConsentPolicy:
+        return PolicyVerdict("DENY", "durable step-up policy required")
+    try:
+        request = verified_profile_request(
+            token, introspector=introspector, request_id=request_id
+        )
+    except (AuthorizationUnavailable, AuthorizationDenied, TypeError, ValueError):
+        return PolicyVerdict("DENY", "verified active PhiID identity required")
+    try:
+        authority, consent = policy.consume(
+            request, now=instant, require_signed=True, require_presence=True
+        )
+    except PolicyDenied:
+        return PolicyVerdict("DENY", "exact signed review and WebAuthn user verification required")
+    return evaluate_authenticated_candidate(
+        request, envelope=envelope, producer_id=PRODUCER,
+        trusted_keys=trusted_keys, replay_cache=replay_cache,
+        authority=authority, consent=consent, now=instant,
+    )
