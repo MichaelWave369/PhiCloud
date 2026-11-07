@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>PhiCloud local operator passkey enrollment</title>
+<link rel="stylesheet" href="/operator_enroll.css">
+<script defer src="/operator_enroll.js"></script>
+</head>
+<body>
+<main>
+<h1>PhiCloud · Local Passkey Enrollment</h1>
+<p class="warning">Development only. This enrolls a passkey for a local synthetic profile review. It does not grant PhiOS control, mail access, real files, or cloud permissions.</p>
+<ol>
+<li>Start the operator enrollment server in your own trusted terminal.</li>
+<li>Enter the one-use pairing code shown in that terminal. Do not paste account tokens or passwords.</li>
+<li>Review the operator identity before creating the passkey. Your authenticator will request user verification.</li>
+</ol>
+<label for="pairing">One-use local pairing code</label>
+<input id="pairing" type="password" maxlength="128" autocomplete="off" autocapitalize="off" spellcheck="false" />
+<button id="unlock" type="button">Unlock registration</button>
+<section id="ceremony" hidden>
+<p><strong>Enrolling a credential for operator:</strong> <span id="operator"></span></p>
+<p>Only the already trusted local operator can use the resulting credential in later independently signed reviews.</p>
+<button id="register" type="button">Register this device / passkey</button>
+</section>
+<p id="status" role="status" aria-live="polite">Not started.</p>
+<p class="warning">A verified authenticator credential is not proof of a particular human's identity. Enrollment trust still depends on control of the local operator terminal and database.</p>
+</main>
+</body>
+</html>
