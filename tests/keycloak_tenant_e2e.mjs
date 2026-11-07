@@ -23,6 +23,8 @@ const READ='phicloud.tenant.read';
 const WRITE='phicloud.tenant.write';
 const SEALED_READ='phicloud.sealed.read';
 const SEALED_WRITE='phicloud.sealed.write';
+const ENVELOPE_READ='phicloud.envelope.read';
+const ENVELOPE_WRITE='phicloud.envelope.write';
 const CALLBACK='http://127.0.0.1:8786/auth/callback';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -128,7 +130,7 @@ function tenantFixture(alice,bob) {
     ],
   });
 }
-async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=null) {
+async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=null,envelopeKey=null) {
   const env={
     ...process.env,
     NODE_ENV:'test',
@@ -141,6 +143,13 @@ async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=
   };
   if(provision)env.PHICLOUD_TENANT_PROVISION_JSON=provision;
   else delete env.PHICLOUD_TENANT_PROVISION_JSON;
+  if(envelopeKey){
+    env.PHICLOUD_ENABLE_ENVELOPE_DEV='1';
+    env.PHICLOUD_ENVELOPE_KEK_PATH=envelopeKey;
+  }else{
+    delete env.PHICLOUD_ENABLE_ENVELOPE_DEV;
+    delete env.PHICLOUD_ENVELOPE_KEK_PATH;
+  }
   if(keyPath){
     env.PHICLOUD_ENABLE_SEALED_DEV='1';
     env.PHICLOUD_SEALED_KEY_PATH=keyPath;
@@ -202,6 +211,8 @@ async function runTests(adminToken,alice,bob,secret){
   const independent=mkdtempSync(join(tmpdir(),'phicloud-r9-witness-'));
   const keyDirectory=mkdtempSync(join(tmpdir(),'phicloud-r10-independent-key-'));
   const sealedKey=join(keyDirectory,'sealed-test.key');
+  const envelopeOld=join(keyDirectory,'envelope-old.key');
+  const envelopeNew=join(keyDirectory,'envelope-new.key');
   const path=join(temp,'private.sqlite');
   const fence=join(independent,'owner-revocations.jsonl');
   const snapshot=join(temp,'older-snapshot.sqlite');
@@ -305,6 +316,87 @@ async function runTests(adminToken,alice,bob,secret){
         'Bob encrypted marker survives restart');
     },null,sealedKey);
     console.log('PASS: R10 real-Keycloak AES-GCM canary, separate key, exact scopes, owner isolation and restart');
+
+    console.log('R11: provisioning two separate offline wrapping keys, no key bytes exposed');
+    const provisionEnv={
+      ...process.env,PHICLOUD_SEALED_KEY_OPERATOR_DEV:'1',
+      PHICLOUD_ENV:'test',NODE_ENV:'test',
+    };
+    for(const kek of [envelopeOld,envelopeNew]){
+      const result=spawnSync('python',[
+        '-m','phicloud.sealed_key_operator','--db',path,
+        '--key-path',kek,'--confirm','CREATE SYNTHETIC TEST KEY'
+      ],{encoding:'utf8',timeout:8000,env:provisionEnv});
+      assert.equal(result.status,0,'R11 independent wrapping-key creation');
+      assert.ok(!result.stdout.includes('PRIVATE KEY'));
+    }
+    const envelopeAliceRead=await login(alice,ENVELOPE_READ);
+    const envelopeAliceWrite=await login(alice,ENVELOPE_WRITE);
+    const envelopeBobRead=await login(bob,ENVELOPE_READ);
+    const envelopeBobWrite=await login(bob,ENVELOPE_WRITE);
+    const envelopePath=(tenant,id)=>url(tenant,'envelope-markers'+(id?'/'+id:''));
+    let envelopeAliceId,envelopeBobId;
+    console.log('R11: real two-user Keycloak independently scoped wrapped-DEK markers');
+    await withPython(path,secret,null,async()=>{
+      await check(await request(null,'GET',envelopePath('alpha-team')),401,
+        'anonymous envelope read');
+      await check(await request(sealedAliceRead,'GET',envelopePath('alpha-team')),401,
+        'R10 scope must not unlock new R11 resource');
+      await check(await request(envelopeAliceRead,'POST',envelopePath('alpha-team'),
+        'create-envelope-test-marker'),401,'envelope read scope cannot create');
+      let a=await request(envelopeAliceWrite,'POST',envelopePath('alpha-team'),
+        'create-envelope-test-marker');
+      await check(a,201,'Alice independent DEK marker create');
+      envelopeAliceId=(await a.json()).id;
+      let b=await request(envelopeBobWrite,'POST',envelopePath('alpha-team'),
+        'create-envelope-test-marker');
+      await check(b,201,'Bob independent DEK marker create');
+      envelopeBobId=(await b.json()).id;
+      await check(await request(envelopeBobRead,'GET',
+        envelopePath('alpha-team',envelopeAliceId)),404,'Bob cross-owner envelope read');
+      await check(await request(envelopeAliceRead,'GET',
+        envelopePath('alpha-team',envelopeBobId)),404,'Alice cross-owner envelope read');
+      await check(await request(envelopeBobWrite,'DELETE',
+        envelopePath('alpha-team',envelopeAliceId),
+        'delete-envelope-test-marker'),404,'Bob cross-owner envelope delete');
+      const visible=await (await request(envelopeAliceRead,'GET',
+        envelopePath('alpha-team',envelopeAliceId))).json();
+      assert.equal(visible.wrapped_data_key,true);
+      assert.equal(visible.per_record_data_key,true);
+      assert.equal(visible.plaintext_returned,false);
+      assert.ok(!JSON.stringify(visible).includes('FIXED_SYNTHETIC_CANARY'));
+    },null,sealedKey,envelopeOld);
+    console.log('R11: offline atomic KEK rewrap preserves payload and IDs');
+    const rewrap=spawnSync('python',[
+      '-m','phicloud.envelope_operator','--db',path,
+      '--old-key',envelopeOld,'--new-key',envelopeNew,
+      '--confirm','REWRAP SYNTHETIC ENVELOPES'
+    ],{
+      encoding:'utf8',timeout:9000,
+      env:{...process.env,PHICLOUD_ENVELOPE_OPERATOR_DEV:'1',
+           PHICLOUD_ENV:'test',NODE_ENV:'test'}
+    });
+    assert.equal(rewrap.status,0,'offline KEK rewrap failed');
+    assert.ok(rewrap.stdout.includes('rewrapped_markers=2'));
+    assert.ok(!rewrap.stdout.includes(envelopeOld));
+    const oldKey=spawnSync('python',[
+      '-c','import sys; from phicloud.tenant_store import LocalTenantStore; '+
+        'from phicloud.envelope_demo import EnvelopeDemoStore; '+
+        'db=LocalTenantStore(sys.argv[1]); EnvelopeDemoStore(db,sys.argv[2])',
+      path,envelopeOld
+    ],{encoding:'utf8',timeout:7000});
+    assert.notEqual(oldKey.status,0,'old KEK unexpectedly accepted after rotation');
+    await withPython(path,secret,null,async()=>{
+      await check(await request(envelopeAliceRead,'GET',
+        envelopePath('alpha-team',envelopeAliceId)),200,
+        'Alice wrapped DEK unreadable after rotate');
+      await check(await request(envelopeBobRead,'GET',
+        envelopePath('alpha-team',envelopeBobId)),200,
+        'Bob wrapped DEK unreadable after rotate');
+      await check(await request(envelopeBobRead,'GET',
+        envelopePath('alpha-team',envelopeAliceId)),404);
+    },null,sealedKey,envelopeNew);
+    console.log('PASS: R11 real Keycloak two-subject envelope ownership, scoped DEK wrap, offline KEK rotation and retained readability');
 
     console.log('R6: restarting resource server and reopening private SQLite');
     await withPython(path,secret,null,async()=>{
@@ -474,6 +566,8 @@ async function main(){
     await configureScope(adminToken,WRITE);
     await configureScope(adminToken,SEALED_READ);
     await configureScope(adminToken,SEALED_WRITE);
+    await configureScope(adminToken,ENVELOPE_READ);
+    await configureScope(adminToken,ENVELOPE_WRITE);
     alice=await fixture.createDisposableUser(adminToken);
     bob=await fixture.createDisposableUser(adminToken);
     await runTests(adminToken,alice,bob,secret);
