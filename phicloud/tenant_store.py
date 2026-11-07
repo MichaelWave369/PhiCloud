@@ -302,9 +302,9 @@ class LocalTenantStore:
                 }
                 # We cannot infer whether DB-only tombstones were newly
                 # created or witness entries were lost. Fail closed.
-                if any(database[pair] != at for pair, at in database.items()
-                       if pair not in self._fence.records
-                       or self._fence.records[pair] != at):
+                if any(pair not in self._fence.records
+                       or self._fence.records[pair] != at
+                       for pair, at in database.items()):
                     raise LocalTenantConfigError("unwitnessed_sqlite_revocation")
                 changes = 0
                 for (tenant, key), at in self._fence.records.items():
