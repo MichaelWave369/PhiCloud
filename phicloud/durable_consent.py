@@ -415,6 +415,232 @@ class DurableOwnerConsentPolicy:
             return True
         return self._transaction(check_and_approve)
 
+    def register_operator_credential(
+        self, *, operator_id: str, credential_id: bytes, public_key: bytes
+    ) -> None:
+        """Trusted, out-of-band VERIFIED WebAuthn registration result only.
+
+        Caller MUST independently verify a real RP registration ceremony and
+        bind the credential to the authenticated operator. This is not a
+        browser-facing enrollment endpoint or evidence of correct enrollment.
+        Credential IDs are immutable, even after revocation.
+        """
+        from .operator_approval import _IDENTIFIER
+        if (
+            type(operator_id) is not str or not _IDENTIFIER.fullmatch(operator_id)
+            or type(credential_id) is not bytes or not 16 <= len(credential_id) <= 128
+            or type(public_key) is not bytes or not 32 <= len(public_key) <= 4096
+        ):
+            raise PolicyDenied("invalid trusted WebAuthn enrollment")
+        def register(conn):
+            active = conn.execute(
+                "SELECT 1 FROM operator_keys WHERE operator_id=? AND revoked=0",
+                (operator_id,),
+            ).fetchone()
+            if active is None:
+                raise PolicyDenied("active signing operator required")
+            if conn.execute(
+                "SELECT count(*) FROM operator_credentials"
+            ).fetchone()[0] >= self._capacity:
+                raise PolicyDenied("operator credential capacity reached")
+            if conn.execute(
+                "SELECT 1 FROM operator_credentials WHERE credential_id=?",
+                (credential_id,),
+            ).fetchone():
+                raise PolicyDenied("WebAuthn credential already enrolled or revoked")
+            conn.execute("""
+                INSERT INTO operator_credentials(
+                    operator_id,credential_id,public_key,sign_count,
+                    revoked,rp_id,origin
+                ) VALUES(?,?,?,0,0,?,?)
+            """, (operator_id,credential_id,public_key,RP_ID,ORIGIN))
+        self._transaction(register)
+
+    def revoke_operator_credential(self, *, credential_id: bytes) -> None:
+        """Atomic revocation tombstone; never re-enroll this credential ID."""
+        if type(credential_id) is not bytes or not 16 <= len(credential_id) <= 128:
+            raise PolicyDenied("invalid credential revocation target")
+        def revoke(conn):
+            changed = conn.execute(
+                "UPDATE operator_credentials SET revoked=1 WHERE credential_id=?",
+                (credential_id,),
+            )
+            if changed.rowcount != 1:
+                raise PolicyDenied("credential not registered")
+            conn.execute("""
+                UPDATE requests SET state='spent',approval_until_ms=NULL
+                WHERE presence_credential_id=? AND state IN ('pending','approved')
+            """, (credential_id,))
+        self._transaction(revoke)
+
+    def begin_operator_stepup(
+        self,
+        receipt: object,
+        *,
+        credential_id: bytes,
+        now: datetime,
+    ) -> bytes:
+        """Issue a one-use random challenge bound to the full R7 signed receipt.
+
+        The resulting challenge MUST be presented to the authenticator with
+        userVerification='required' on the fixed RP and origin. The browser
+        must separately display the exact request and warn about its scope.
+        """
+        instant = _utc(now)
+        if type(receipt) is not dict or type(credential_id) is not bytes:
+            raise PolicyDenied("signed receipt and enrolled credential required")
+        try:
+            digest = exact_receipt_digest(receipt)
+        except (PolicyDenied, UnicodeError, ValueError):
+            raise PolicyDenied("invalid signed review digest")
+        review_id, operator_id, kid = (
+            receipt.get("review_id"), receipt.get("operator_id"), receipt.get("kid")
+        )
+        if any(type(v) is not str for v in (review_id,operator_id,kid)):
+            raise PolicyDenied("invalid signed review selector")
+        def issue(conn):
+            row = conn.execute("""
+                SELECT r.issuer,r.subject,r.request_json,r.review_until_ms,
+                       r.presence_challenge,o.revoked,
+                       k.public_key,k.revoked,
+                       c.revoked,c.rp_id,c.origin
+                FROM requests r JOIN owners o ON
+                  r.issuer=o.issuer AND r.subject=o.subject
+                LEFT JOIN operator_keys k ON k.operator_id=? AND k.kid=?
+                LEFT JOIN operator_credentials c ON c.credential_id=?
+                AND c.operator_id=?
+                WHERE r.review_id=? AND r.state='pending'
+            """, (operator_id,kid,credential_id,operator_id,review_id)).fetchone()
+            if row is None:
+                raise PolicyDenied("pending operator review missing")
+            (issuer,subject,request_json,review_until,existing,owner_revoked,
+             key,key_revoked,cred_revoked,rp_id,origin) = row
+            if (
+                owner_revoked or existing is not None or key is None
+                or key_revoked != 0 or cred_revoked != 0
+                or rp_id != RP_ID or origin != ORIGIN
+            ):
+                raise PolicyDenied("untrusted operator or already-issued stepup")
+            try:
+                req = EffectRequest(**json.loads(request_json))
+                ticket = ReviewTicket(
+                    review_id=review_id,request=req,
+                    expires_at=datetime.fromtimestamp(review_until/1000,timezone.utc),
+                )
+                expiry=verified_receipt_expiry(
+                    receipt,ticket=ticket,public_key=bytes(key),now=instant,
+                )
+            except (PolicyDenied,ValueError,TypeError,KeyError,OverflowError):
+                raise PolicyDenied("signed review not valid for this challenge")
+            if not self._allow(req) or req.subject_issuer != issuer or req.subject_id != subject:
+                raise PolicyDenied("unsupported or mismatched operator action")
+            deadline=min(
+                review_until, expiry,
+                int((instant+timedelta(seconds=30)).timestamp()*1000),
+            )
+            if int(instant.timestamp()*1000) >= deadline:
+                raise PolicyDenied("stepup challenge already expired")
+            challenge=secrets.token_bytes(32)
+            conn.execute("""
+                UPDATE requests SET presence_challenge=?,presence_digest=?,
+                    presence_credential_id=?,presence_until_ms=?
+                WHERE review_id=? AND state='pending'
+            """, (challenge,digest,credential_id,deadline,review_id))
+            return challenge
+        return self._transaction(issue)
+
+    def approve_signed_with_stepup(
+        self,
+        receipt: object,
+        assertion: object,
+        *,
+        now: datetime,
+    ) -> bool:
+        """One atomic signed-review + WebAuthn UV stepup, or burn review.
+
+        The challenge must have been issued from begin_operator_stepup().
+        Credentials, counters and allowed origin/RP all come from trusted
+        SQLite enrollment. No public endpoint, browser-provided keys or
+        fake user-presence booleans are accepted.
+        """
+        instant=_utc(now)
+        if type(receipt) is not dict or type(assertion) is not dict:
+            return False
+        review_id,operator_id,kid=(
+            receipt.get("review_id"),receipt.get("operator_id"),receipt.get("kid")
+        )
+        if any(type(v) is not str for v in (review_id,operator_id,kid)):
+            return False
+        def verify_and_approve(conn):
+            row=conn.execute("""
+                SELECT r.issuer,r.subject,r.request_json,r.review_until_ms,
+                    r.presence_challenge,r.presence_digest,
+                    r.presence_credential_id,r.presence_until_ms,
+                    o.revoked,k.public_key,k.revoked,
+                    c.public_key,c.sign_count,c.revoked,c.operator_id,c.rp_id,c.origin
+                FROM requests r JOIN owners o
+                   ON r.issuer=o.issuer AND r.subject=o.subject
+                LEFT JOIN operator_keys k
+                   ON k.operator_id=? AND k.kid=?
+                LEFT JOIN operator_credentials c
+                   ON c.credential_id=r.presence_credential_id
+                WHERE r.review_id=? AND r.state='pending'
+            """, (operator_id,kid,review_id)).fetchone()
+            if row is None:
+                return False
+            # Denied/forged attempts burn this one-use review even on failure.
+            conn.execute("UPDATE requests SET state='spent' WHERE review_id=?",(review_id,))
+            (issuer,subject,saved,review_until,challenge,digest,
+             credential_id,stepup_until,owner_revoked,key,key_revoked,
+             cred_public,counter,cred_revoked,cred_operator,rp_id,origin)=row
+            now_ms=int(instant.timestamp()*1000)
+            if (
+                owner_revoked or key is None or key_revoked != 0
+                or cred_public is None or cred_revoked != 0
+                or cred_operator != operator_id or rp_id != RP_ID or origin != ORIGIN
+                or type(challenge) is not bytes or len(challenge) != 32
+                or type(stepup_until) is not int or now_ms >= stepup_until
+            ):
+                return False
+            try:
+                if exact_receipt_digest(receipt) != bytes(digest):
+                    return False
+                req=EffectRequest(**json.loads(saved))
+                ticket=ReviewTicket(
+                    review_id=review_id,request=req,
+                    expires_at=datetime.fromtimestamp(review_until/1000,timezone.utc),
+                )
+                expiry=verified_receipt_expiry(
+                    receipt,ticket=ticket,public_key=bytes(key),now=instant,
+                )
+                new_count=verify_stepup_assertion(
+                    assertion=assertion,challenge=bytes(challenge),
+                    credential_id=bytes(credential_id),
+                    credential_public_key=bytes(cred_public),
+                    sign_count=counter,
+                )
+            except (PolicyDenied,ValueError,TypeError,KeyError,OverflowError,UnicodeError):
+                return False
+            if not self._allow(req) or req.subject_issuer != issuer or req.subject_id != subject:
+                return False
+            deadline=min(stepup_until,expiry)
+            conn.execute(
+                "UPDATE operator_credentials SET sign_count=? WHERE credential_id=?",
+                (new_count,credential_id),
+            )
+            conn.execute("""
+                UPDATE requests SET state='approved',approval_until_ms=?,
+                    signer_id=?,signer_kid=?,signed_receipt=?,
+                    presence_verified=1,presence_challenge=NULL
+                WHERE review_id=?
+            """,(
+                deadline,operator_id,kid,
+                json.dumps(receipt,sort_keys=True,separators=(",",":"),ensure_ascii=True),
+                review_id,
+            ))
+            return True
+        return self._transaction(verify_and_approve)
+
     def revoke_owner(self, *, issuer: str, sub: str) -> None:
         """Persist a tombstone. Fresh sign-in cannot silently reenable owner."""
         if type(issuer) is not str or type(sub) is not str or not issuer or not sub:
