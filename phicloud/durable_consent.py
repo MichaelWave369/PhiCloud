@@ -27,8 +27,11 @@ from .local_consent import (
 from .shield_policy import AuthorityEvidence, ConsentEvidence, EffectRequest, _utc
 from .local_consent import LocalOwnerConsentPolicy
 from .operator_approval import verified_receipt_expiry
+from .webauthn_presence import (
+    RP_ID, ORIGIN, exact_receipt_digest, verify_stepup_assertion,
+)
 
-_VERSION = 2
+_VERSION = 3
 
 
 def _request_json(req: EffectRequest) -> str:
@@ -120,7 +123,7 @@ class DurableOwnerConsentPolicy:
     def _initialize(self) -> None:
         def create(conn):
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1, _VERSION):
+            if version not in (0, 1, 2, _VERSION):
                 raise PolicyDenied("unrecognized policy schema; fail closed")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS owners(
@@ -152,6 +155,11 @@ class DurableOwnerConsentPolicy:
                 ("signer_id", "TEXT"),
                 ("signer_kid", "TEXT"),
                 ("signed_receipt", "TEXT"),
+                ("presence_challenge", "BLOB"),
+                ("presence_digest", "BLOB"),
+                ("presence_credential_id", "BLOB"),
+                ("presence_until_ms", "INTEGER"),
+                ("presence_verified", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if column not in existing:
                     conn.execute(
@@ -164,6 +172,16 @@ class DurableOwnerConsentPolicy:
                     public_key BLOB NOT NULL,
                     revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),
                     PRIMARY KEY(operator_id,kid)
+                )""")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS operator_credentials(
+                    operator_id TEXT NOT NULL,
+                    credential_id BLOB NOT NULL PRIMARY KEY,
+                    public_key BLOB NOT NULL,
+                    sign_count INTEGER NOT NULL DEFAULT 0,
+                    revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),
+                    rp_id TEXT NOT NULL,
+                    origin TEXT NOT NULL
                 )""")
             conn.execute(f"PRAGMA user_version={_VERSION}")
         self._transaction(create)
