@@ -61,3 +61,14 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [ ] Confirm all CI checks green on R3a PR
 - [ ] Add real per-resource owner/tenant isolation and permission checks before any file/mail content
 - [ ] Review TLS, secret rotation, audit, recovery and public security perimeter separately before hosting
+
+## R4: Scoped owner-isolated temporary resources (local-only evidence)
+
+- [x] Add default-off, in-memory demo records with strict verified issuer+subject ownership
+- [x] Separate exact `phicloud.demo.read` and `phicloud.demo.write` Keycloak scopes, checked at resource server on every request
+- [x] Prevent other subjects from listing/reading/deleting even when an opaque record ID is known
+- [x] Reject caller-controlled owner/body, cross-origin mutations, bad action headers, stale/invalid scopes and unavailable identity provider
+- [x] Bound TTL, owner/global capacity, and concurrency-safe store operations
+- [x] Extend real Keycloak CI to use two distinct signed-in users and independent logout checks
+- [ ] Confirm latest-commit Python/ANC/PhiShield and real Keycloak workflow are green
+- [ ] Design actual tenant-aware durable resource persistence and owner/operation authorization before files or mailbox data
