@@ -414,36 +414,68 @@ class DurableOwnerConsentPolicy:
         self._transaction(revoke_tx)
 
     def consume(
-        self, request: EffectRequest, *, now: datetime
+        self, request: EffectRequest, *, now: datetime, require_signed: bool = False
     ) -> tuple[AuthorityEvidence, ConsentEvidence]:
+        """Spend exactly one request; optionally REQUIRE a trusted signed review.
+
+        Every signed review is verified again on consumption, even for R6
+        callers that do not opt into require_signed. A revoked key can never
+        authorize after key rotation or process restart.
+        """
         instant = _utc(now)
-        if not self._allow(request):
-            raise PolicyDenied("unsupported operation")
+        if type(require_signed) is not bool or not self._allow(request):
+            raise PolicyDenied("unsupported operation or review mode")
         def consume_tx(conn):
             row = conn.execute("""
-                SELECT r.request_json,r.state,r.approval_until_ms,o.revoked
+                SELECT r.review_id,r.request_json,r.state,r.review_until_ms,
+                       r.approval_until_ms,o.revoked,r.signer_id,r.signer_kid,
+                       r.signed_receipt,k.public_key,k.revoked
                 FROM requests r JOIN owners o
                   ON r.issuer=o.issuer AND r.subject=o.subject
+                LEFT JOIN operator_keys k
+                  ON r.signer_id=k.operator_id AND r.signer_kid=k.kid
                 WHERE r.issuer=? AND r.subject=? AND r.request_id=?
             """, (request.subject_issuer,request.subject_id,request.request_id)).fetchone()
             if row is None:
                 raise PolicyDenied("missing owner approval")
-            saved,state,deadline,revoked = row
-            if revoked or state != "approved" or deadline is None:
+            (review_id,saved,state,review_until,deadline,owner_revoked,
+             signer_id,kid,receipt_json,key,key_revoked) = row
+            if owner_revoked or state != "approved" or deadline is None:
                 raise PolicyDenied("approval absent, revoked or already consumed")
-            # Consume before validating. A failed attempt cannot be replayed.
+            # Consume BEFORE independently rechecking the signature so
+            # any invalid or expired attempt commits an irrevocable tombstone.
             conn.execute("""
                 UPDATE requests SET state='spent',approval_until_ms=NULL
                 WHERE issuer=? AND subject=? AND request_id=?
             """, (request.subject_issuer,request.subject_id,request.request_id))
             if saved != _request_json(request) or _milliseconds(instant) >= deadline:
                 return _SpentApproval("mismatched or expired approval")
+            if require_signed and signer_id is None:
+                return _SpentApproval("independently signed review required")
+            if signer_id is not None:
+                if (
+                    type(kid) is not str or key is None or key_revoked != 0
+                    or type(receipt_json) is not str
+                ):
+                    return _SpentApproval("operator signer unavailable or revoked")
+                try:
+                    ticket = ReviewTicket(
+                        review_id=review_id,request=request,
+                        expires_at=datetime.fromtimestamp(review_until/1000,timezone.utc),
+                    )
+                    verified_receipt_expiry(
+                        json.loads(receipt_json),ticket=ticket,
+                        public_key=bytes(key),now=instant,
+                    )
+                except (PolicyDenied,ValueError,TypeError,KeyError,OverflowError):
+                    return _SpentApproval("stored signer evidence unverifiable")
+            elif kid is not None or receipt_json is not None:
+                return _SpentApproval("partial operator signature metadata")
             until = datetime.fromtimestamp(deadline / 1000, tz=timezone.utc).isoformat()
             return (
                 AuthorityEvidence(**asdict(request),not_after=until),
                 ConsentEvidence(**asdict(request),not_after=until),
             )
-        # The expired/mismatched attempt must COMMIT its spent tombstone.
         result = self._transaction(consume_tx)
         if isinstance(result, _SpentApproval):
             raise PolicyDenied(str(result))
