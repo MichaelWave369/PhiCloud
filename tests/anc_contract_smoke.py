@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 
 from anc.integrations.phikernel_soc_adapter import guard_input_text
@@ -76,7 +76,18 @@ def run() -> None:
     forged["mac"] = "0" * 64
     assert decide(forged).disposition == "DENY"
 
-    print("ANC -> authenticated local PhiCloud advisory smoke: 5 cases passed")
+    substituted = signed("Summarize continuity metrics")
+    other_request = replace(request, resource="service:another")
+    other_authority = AuthorityEvidence(**asdict(other_request), not_after=expiry)
+    other_consent = ConsentEvidence(**asdict(other_request), not_after=expiry)
+    substitution_result = evaluate_authenticated_candidate(
+        other_request, envelope=substituted, producer_id=producer_id,
+        trusted_keys=keys, replay_cache=replay, authority=other_authority,
+        consent=other_consent, now=now,
+    )
+    assert substitution_result.disposition == "DENY", substitution_result
+
+    print("ANC -> authenticated local PhiCloud advisory smoke: 6 cases passed")
 
 
 if __name__ == "__main__":
