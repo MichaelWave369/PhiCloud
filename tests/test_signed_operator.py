@@ -205,16 +205,23 @@ class SignedOperatorApprovalTests(unittest.TestCase):
         ))
 
     def test_expired_and_oversized_signed_receipts_denied(self):
-        for modifications in (
-            {"expires_at_ms":int(self.now.timestamp()*1000)-1},
-            {"expires_at_ms":int(self.now.timestamp()*1000)+31_000},
-            {"issued_at_ms":int(self.now.timestamp()*1000)+10_000},
-            {"nonce":"n"*5000},
+        for label, modifications in (
+            ("expired",{"expires_at_ms":int(self.now.timestamp()*1000)-1}),
+            ("too-long",{"expires_at_ms":int(self.now.timestamp()*1000)+31_000}),
+            ("future",{"issued_at_ms":int(self.now.timestamp()*1000)+10_000}),
         ):
-            with self.subTest(modifications=modifications):
+            with self.subTest(label=label):
                 ticket=self.stage()
                 signed=self.sign(ticket,**modifications)
                 self.assertFalse(self.fresh().approve_signed(signed,now=self.now))
+        ticket=self.stage()
+        # A legitimate signer must refuse to sign an oversized canonical
+        # body. A malicious inbound oversized receipt must also fail.
+        with self.assertRaises(PolicyDenied):
+            self.sign(ticket,nonce="n"*5000)
+        oversized=self.sign(ticket)
+        oversized["nonce"]="n"*5000
+        self.assertFalse(self.fresh().approve_signed(oversized,now=self.now))
 
     def test_public_key_rotation_and_revocation_persist(self):
         old=self.stage("r7-old")
@@ -326,6 +333,8 @@ class SignedOperatorApprovalTests(unittest.TestCase):
                 ),
             )
             conn.execute("PRAGMA user_version=1")
+        # Mimic R6's operator-owned 0600 SQLite file, not umask-default 0644.
+        legacy.chmod(0o600)
         migrated=DurableOwnerConsentPolicy(legacy)
         with sqlite3.connect(legacy) as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0],2)
