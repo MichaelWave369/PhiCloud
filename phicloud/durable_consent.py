@@ -267,6 +267,7 @@ class DurableOwnerConsentPolicy:
                 FROM requests r JOIN owners o
                   ON (r.issuer=o.issuer AND r.subject=o.subject)
                 WHERE r.review_id=? AND r.state='pending'
+                  AND r.presence_challenge IS NULL
             """, (review_id,)).fetchone()
             if row is None:
                 return False
@@ -377,6 +378,7 @@ class DurableOwnerConsentPolicy:
                 LEFT JOIN operator_keys k
                   ON k.operator_id=? AND k.kid=?
                 WHERE r.review_id=? AND r.state='pending'
+                  AND r.presence_challenge IS NULL
             """, (operator_id,kid,review_id)).fetchone()
             if row is None:
                 return False
@@ -716,7 +718,9 @@ class DurableOwnerConsentPolicy:
                 return _SpentApproval("mismatched or expired approval")
             if require_signed and signer_id is None:
                 return _SpentApproval("independently signed review required")
-            if require_presence:
+            # A UV-verified review cannot be downgraded through an older
+            # signed-only call after its authenticator credential is revoked.
+            if require_presence or present == 1:
                 if (
                     signer_id is None or present != 1
                     or type(presence_until) is not int
