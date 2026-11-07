@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -176,6 +178,17 @@ class SealedStoreTests(unittest.TestCase):
                 "PHICLOUD_SEALED_KEY_PATH":str(self.key_path),
                 "PHICLOUD_ENV":"production",
             })
+
+
+class StdlibDefaultImportTests(unittest.TestCase):
+    def test_default_registry_imports_without_optional_crypto_wheels(self):
+        # -S deliberately omits site-packages: R10 must not make the existing
+        # R0 registry require cryptography just to start or serve declarations.
+        result = subprocess.run(
+            [sys.executable, "-S", "-c", "import phicloud.server"],
+            capture_output=True, text=True, timeout=8
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class SealedHttpTests(unittest.TestCase):
