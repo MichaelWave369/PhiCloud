@@ -288,6 +288,27 @@ function checkR6DurableReview(token, secret, expected, mode = 'approve') {
     'R6 must preserve owner-bound approval and revocation across restart');
 }
 
+function checkR7SignedOperator(token, secret, expected, mode = 'good') {
+  // Real disposable Keycloak token, synthetic operator key/signature.
+  // No private key, bearer token or client secret in process arguments.
+  const result = spawnSync('python', ['tests/signed_operator_e2e.py'], {
+    env: {
+      ...process.env,
+      PHICLOUD_OAUTH_CLIENT_SECRET: secret,
+      PHICLOUD_R7_REVIEW_FIXTURE: mode,
+      PHICLOUD_REAL_E2E: '1',
+      NODE_ENV: 'test',
+      PYTHONPATH: '.',
+    },
+    input: token,
+    encoding: 'utf8',
+    timeout: 12000,
+  });
+  assert.equal(result.status, 0, 'R7 signed operator review smoke unavailable');
+  assert.equal(result.stdout.trim(), expected,
+    'R7 must verify real identity and revocable Ed25519 operator evidence');
+}
+
 async function exercise(admin, user, bob, secret) {
   await withPythonServer(secret, async()=>{
     const start=await resourceRequest(null);
@@ -318,6 +339,11 @@ async function exercise(admin, user, bob, secret) {
     checkR6DurableReview(valid, secret, 'CANDIDATE', 'approve');
     checkR6DurableReview(valid, secret, 'DENY', 'deny');
     checkR6DurableReview(valid, secret, 'DENY', 'revoke');
+    console.log('R7: Ed25519 signature, wrong signature, unsigned fallback and key revocation');
+    checkR7SignedOperator(valid, secret, 'CANDIDATE', 'good');
+    checkR7SignedOperator(valid, secret, 'DENY', 'wrong-signature');
+    checkR7SignedOperator(valid, secret, 'DENY', 'unsigned');
+    checkR7SignedOperator(valid, secret, 'DENY', 'revoke-key');
 
     console.log('R3: wrong scope, wrong audience and ID-only flows denied');
     const noScope=await exchangeUserToken('phiid-bff-dev',
@@ -327,6 +353,7 @@ async function exercise(admin, user, bob, secret) {
     checkInternalShield(noScope, secret, 'DENY', true);
     checkR5OwnerReview(noScope, secret, 'DENY', 'approve');
     checkR6DurableReview(noScope, secret, 'DENY', 'approve');
+    checkR7SignedOperator(noScope, secret, 'DENY', 'good');
 
     const mailToken=await exchangeUserToken('phimail-bff-dev',
       'http://127.0.0.1:5173/auth/phiid/callback','openid profile',user);
@@ -335,6 +362,7 @@ async function exercise(admin, user, bob, secret) {
     checkInternalShield(mailToken, secret, 'DENY', true);
     checkR5OwnerReview(mailToken, secret, 'DENY', 'approve');
     checkR6DurableReview(mailToken, secret, 'DENY', 'approve');
+    checkR7SignedOperator(mailToken, secret, 'DENY', 'good');
     assert.equal((await resourceRequest('not-a-real-token-with-any-permissions')).status,401);
 
     const owners=await exerciseOwnerIsolation(user,bob,valid);
@@ -348,6 +376,7 @@ async function exercise(admin, user, bob, secret) {
     checkInternalShield(valid, secret, 'DENY', true);
     checkR5OwnerReview(valid, secret, 'DENY', 'approve');
     checkR6DurableReview(valid, secret, 'DENY', 'approve');
+    checkR7SignedOperator(valid, secret, 'DENY', 'good');
     assert.equal((await resourceRequest(owners.aliceToken,
       '/v1/private/demo-records/'+owners.aliceId)).status,401,
       'Alice revoked token remained valid for owner record');
@@ -364,6 +393,7 @@ async function exercise(admin, user, bob, secret) {
     console.log('PASS: R4 PhiShield internal integration requires real active subject, exact scope and independent consent fixture');
     console.log('PASS: R5 one-use owner review requires active Keycloak identity and exact simulated approval');
     console.log('PASS: R6 SQLite approval/revocation survives restart and requires active Keycloak identity');
+    console.log('PASS: R7 independent Ed25519 verifier rejects untrusted, revoked, unsigned and replayed operator review');
     console.log('BOUNDARY: no cloud data, file I/O, Gmail or PhiOS operations performed');
   });
 }

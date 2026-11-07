@@ -194,3 +194,40 @@ def evaluate_reviewed_profile_candidate(
         trusted_keys=trusted_keys, replay_cache=replay_cache,
         authority=authority, consent=consent, now=instant,
     )
+
+
+def evaluate_signed_profile_candidate(
+    token: str,
+    *,
+    request_id: str,
+    introspector: LocalTokenIntrospector,
+    policy: DurableOwnerConsentPolicy,
+    envelope: object,
+    trusted_keys: Mapping[tuple[str, str], bytes],
+    replay_cache: LocalReplayCache,
+    now: datetime | None = None,
+) -> PolicyVerdict:
+    """R7 signed-only reference entry point: no legacy boolean approvals.
+
+    The operator public key is pinned in the local R7 database, and each
+    receipt is reverified in the same atomic transaction as consumption.
+    A valid signature is still not PhiOS/device execution authority.
+    """
+    instant = _utc(now if now is not None else datetime.now(timezone.utc))
+    if type(policy) is not DurableOwnerConsentPolicy:
+        return PolicyVerdict("DENY", "durable signed-review policy required")
+    try:
+        request = verified_profile_request(
+            token, introspector=introspector, request_id=request_id
+        )
+    except (AuthorizationUnavailable, AuthorizationDenied, TypeError, ValueError):
+        return PolicyVerdict("DENY", "verified and active PhiID identity required")
+    try:
+        authority, consent = policy.consume(request, now=instant, require_signed=True)
+    except PolicyDenied:
+        return PolicyVerdict("DENY", "valid and unrevoked signed operator review required")
+    return evaluate_authenticated_candidate(
+        request, envelope=envelope, producer_id=PRODUCER,
+        trusted_keys=trusted_keys, replay_cache=replay_cache,
+        authority=authority, consent=consent, now=instant,
+    )

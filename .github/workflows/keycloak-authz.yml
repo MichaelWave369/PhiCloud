@@ -48,6 +48,10 @@ jobs:
         working-directory: integration/phiid
         run: npm install --no-audit --no-fund
 
+      - name: Install pinned operator signature verifier
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary=:all: -r requirements-operator.txt
+
       - name: Python and JavaScript safety preflight
         run: |
           python -m compileall -q phicloud tests

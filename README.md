@@ -113,6 +113,27 @@ Windows ACL protection. It requires POSIX `0700` private-directory checks
 creation fails closed until ACL auditing is designed. The existing
 in-memory R5 reference remains the default.
 
+## R7: Ed25519-signed operator review (optional local prototype)
+
+The [R7 signed operator review](docs/R7_SIGNED_OPERATOR_REVIEW.md) uses
+**real asymmetric Ed25519 signatures** over the exact staged synthetic
+profile-read action. The private signing key stays **outside** PhiCloud;
+the local SQLite ledger stores pinned public keys and permanent key-ID
+revocation tombstones. Rotation enrolls a new key ID before revoking
+the old one. Existing signed approvals are invalidated when their
+signer key is revoked.
+
+R7's signed-only evaluation path checks fresh PhiID identity, current
+signer trust, one-use approval and authenticated ANC risk. Legacy
+unsigned approvals cannot enter this path. Even success returns only
+**non-executable `CANDIDATE`**, not OS authority.
+
+The optional verifier requires
+`python -m pip install -r requirements-operator.txt`. This
+rung remains POSIX/local development only, with synthetic signatures
+in CI and **no verified human signing ceremony**, hosted approval
+service, real data permissions or native Windows ACL support.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.

@@ -26,8 +26,9 @@ from .local_consent import (
 )
 from .shield_policy import AuthorityEvidence, ConsentEvidence, EffectRequest, _utc
 from .local_consent import LocalOwnerConsentPolicy
+from .operator_approval import verified_receipt_expiry
 
-_VERSION = 1
+_VERSION = 2
 
 
 def _request_json(req: EffectRequest) -> str:
@@ -119,7 +120,7 @@ class DurableOwnerConsentPolicy:
     def _initialize(self) -> None:
         def create(conn):
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, _VERSION):
+            if version not in (0, 1, _VERSION):
                 raise PolicyDenied("unrecognized policy schema; fail closed")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS owners(
@@ -140,6 +141,29 @@ class DurableOwnerConsentPolicy:
                     approval_until_ms INTEGER,
                     PRIMARY KEY(issuer,subject,request_id),
                     FOREIGN KEY(issuer,subject) REFERENCES owners(issuer,subject)
+                )""")
+
+            # R7 migrates existing R6 databases without losing owners,
+            # previously approved entries, or irrevocable used ID tombstones.
+            existing = {
+                row[1] for row in conn.execute("PRAGMA table_info(requests)")
+            }
+            for column, declaration in (
+                ("signer_id", "TEXT"),
+                ("signer_kid", "TEXT"),
+                ("signed_receipt", "TEXT"),
+            ):
+                if column not in existing:
+                    conn.execute(
+                        f"ALTER TABLE requests ADD COLUMN {column} {declaration}"
+                    )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS operator_keys(
+                    operator_id TEXT NOT NULL,
+                    kid TEXT NOT NULL,
+                    public_key BLOB NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),
+                    PRIMARY KEY(operator_id,kid)
                 )""")
             conn.execute(f"PRAGMA user_version={_VERSION}")
         self._transaction(create)
@@ -253,6 +277,126 @@ class DurableOwnerConsentPolicy:
             return True
         return self._transaction(approve_tx)
 
+    def register_operator_key(
+        self, *, operator_id: str, kid: str, public_key: bytes
+    ) -> None:
+        """Trusted provisioning of a public verifier key; no private key here.
+
+        Key IDs are immutable, including after revocation. Rotation means
+        enrolling a new kid and revoking the old kid through trusted code.
+        """
+        from .operator_approval import _IDENTIFIER, Ed25519PublicKey
+        if (
+            Ed25519PublicKey is None
+            or type(operator_id) is not str or not _IDENTIFIER.fullmatch(operator_id)
+            or type(kid) is not str or not _IDENTIFIER.fullmatch(kid)
+            or type(public_key) is not bytes or len(public_key) != 32
+        ):
+            raise PolicyDenied("invalid operator key enrollment")
+        def register_key(conn):
+            row = conn.execute(
+                "SELECT 1 FROM operator_keys WHERE operator_id=? AND kid=?",
+                (operator_id,kid),
+            ).fetchone()
+            if row is not None:
+                raise PolicyDenied("operator key ID already enrolled or revoked")
+            # An old compromised public key must not be re-enrolled under
+            # a new kid to bypass its durable revocation tombstone.
+            same_public = conn.execute(
+                "SELECT 1 FROM operator_keys WHERE public_key=?", (public_key,)
+            ).fetchone()
+            if same_public is not None:
+                raise PolicyDenied("operator public key already enrolled under another ID")
+            if conn.execute("SELECT count(*) FROM operator_keys").fetchone()[0] >= self._capacity:
+                raise PolicyDenied("operator key registry at capacity")
+            conn.execute(
+                "INSERT INTO operator_keys(operator_id,kid,public_key,revoked) VALUES(?,?,?,0)",
+                (operator_id,kid,public_key),
+            )
+        self._transaction(register_key)
+
+    def revoke_operator_key(self, *, operator_id: str, kid: str) -> None:
+        """Persist a public-key tombstone and atomically burn unspent approvals."""
+        from .operator_approval import _IDENTIFIER
+        if (
+            type(operator_id) is not str or not _IDENTIFIER.fullmatch(operator_id)
+            or type(kid) is not str or not _IDENTIFIER.fullmatch(kid)
+        ):
+            raise PolicyDenied("invalid operator key revocation target")
+        def revoke_key(conn):
+            changed = conn.execute(
+                "UPDATE operator_keys SET revoked=1 WHERE operator_id=? AND kid=?",
+                (operator_id,kid),
+            )
+            if changed.rowcount != 1:
+                raise PolicyDenied("operator key not enrolled")
+            conn.execute("""
+                UPDATE requests SET state='spent', approval_until_ms=NULL
+                WHERE signer_id=? AND signer_kid=? AND state='approved'
+            """, (operator_id,kid))
+        self._transaction(revoke_key)
+
+    def approve_signed(self, receipt: object, *, now: datetime) -> bool:
+        """Verify exact Ed25519 receipt against trusted operator public key.
+
+        A malformed or refused review burns the staged ticket. The signature
+        is verified again at consumption. No client-supplied keys are trusted.
+        """
+        instant = _utc(now)
+        if type(receipt) is not dict:
+            return False
+        operator_id, kid, review_id = (
+            receipt.get("operator_id"), receipt.get("kid"), receipt.get("review_id")
+        )
+        if any(type(v) is not str for v in (operator_id,kid,review_id)):
+            return False
+        def check_and_approve(conn):
+            row = conn.execute("""
+                SELECT r.issuer,r.subject,r.request_json,r.review_until_ms,
+                       o.revoked,k.public_key,k.revoked
+                FROM requests r JOIN owners o
+                  ON r.issuer=o.issuer AND r.subject=o.subject
+                LEFT JOIN operator_keys k
+                  ON k.operator_id=? AND k.kid=?
+                WHERE r.review_id=? AND r.state='pending'
+            """, (operator_id,kid,review_id)).fetchone()
+            if row is None:
+                return False
+            conn.execute(
+                "UPDATE requests SET state='spent' WHERE review_id=?",
+                (review_id,),
+            )
+            issuer,subject,saved,until,owner_revoked,key,signer_revoked = row
+            if owner_revoked or signer_revoked != 0 or key is None:
+                return False
+            try:
+                request = EffectRequest(**json.loads(saved))
+                ticket = ReviewTicket(
+                    review_id=review_id,
+                    request=request,
+                    expires_at=datetime.fromtimestamp(until / 1000,timezone.utc),
+                )
+                expiry = verified_receipt_expiry(
+                    receipt,ticket=ticket,public_key=bytes(key),now=instant,
+                )
+            except (PolicyDenied,ValueError,TypeError,OverflowError,KeyError):
+                return False
+            if not self._allow(request) or request.subject_issuer != issuer or request.subject_id != subject:
+                return False
+            deadline = min(until,expiry)
+            conn.execute("""
+                UPDATE requests
+                SET state='approved',approval_until_ms=?,
+                    signer_id=?,signer_kid=?,signed_receipt=?
+                WHERE review_id=?
+            """, (
+                deadline,operator_id,kid,
+                json.dumps(receipt,sort_keys=True,separators=(",",":"),ensure_ascii=True),
+                review_id,
+            ))
+            return True
+        return self._transaction(check_and_approve)
+
     def revoke_owner(self, *, issuer: str, sub: str) -> None:
         """Persist a tombstone. Fresh sign-in cannot silently reenable owner."""
         if type(issuer) is not str or type(sub) is not str or not issuer or not sub:
@@ -277,36 +421,68 @@ class DurableOwnerConsentPolicy:
         self._transaction(revoke_tx)
 
     def consume(
-        self, request: EffectRequest, *, now: datetime
+        self, request: EffectRequest, *, now: datetime, require_signed: bool = False
     ) -> tuple[AuthorityEvidence, ConsentEvidence]:
+        """Spend exactly one request; optionally REQUIRE a trusted signed review.
+
+        Every signed review is verified again on consumption, even for R6
+        callers that do not opt into require_signed. A revoked key can never
+        authorize after key rotation or process restart.
+        """
         instant = _utc(now)
-        if not self._allow(request):
-            raise PolicyDenied("unsupported operation")
+        if type(require_signed) is not bool or not self._allow(request):
+            raise PolicyDenied("unsupported operation or review mode")
         def consume_tx(conn):
             row = conn.execute("""
-                SELECT r.request_json,r.state,r.approval_until_ms,o.revoked
+                SELECT r.review_id,r.request_json,r.state,r.review_until_ms,
+                       r.approval_until_ms,o.revoked,r.signer_id,r.signer_kid,
+                       r.signed_receipt,k.public_key,k.revoked
                 FROM requests r JOIN owners o
                   ON r.issuer=o.issuer AND r.subject=o.subject
+                LEFT JOIN operator_keys k
+                  ON r.signer_id=k.operator_id AND r.signer_kid=k.kid
                 WHERE r.issuer=? AND r.subject=? AND r.request_id=?
             """, (request.subject_issuer,request.subject_id,request.request_id)).fetchone()
             if row is None:
                 raise PolicyDenied("missing owner approval")
-            saved,state,deadline,revoked = row
-            if revoked or state != "approved" or deadline is None:
+            (review_id,saved,state,review_until,deadline,owner_revoked,
+             signer_id,kid,receipt_json,key,key_revoked) = row
+            if owner_revoked or state != "approved" or deadline is None:
                 raise PolicyDenied("approval absent, revoked or already consumed")
-            # Consume before validating. A failed attempt cannot be replayed.
+            # Consume BEFORE independently rechecking the signature so
+            # any invalid or expired attempt commits an irrevocable tombstone.
             conn.execute("""
                 UPDATE requests SET state='spent',approval_until_ms=NULL
                 WHERE issuer=? AND subject=? AND request_id=?
             """, (request.subject_issuer,request.subject_id,request.request_id))
             if saved != _request_json(request) or _milliseconds(instant) >= deadline:
                 return _SpentApproval("mismatched or expired approval")
+            if require_signed and signer_id is None:
+                return _SpentApproval("independently signed review required")
+            if signer_id is not None:
+                if (
+                    type(kid) is not str or key is None or key_revoked != 0
+                    or type(receipt_json) is not str
+                ):
+                    return _SpentApproval("operator signer unavailable or revoked")
+                try:
+                    ticket = ReviewTicket(
+                        review_id=review_id,request=request,
+                        expires_at=datetime.fromtimestamp(review_until/1000,timezone.utc),
+                    )
+                    verified_receipt_expiry(
+                        json.loads(receipt_json),ticket=ticket,
+                        public_key=bytes(key),now=instant,
+                    )
+                except (PolicyDenied,ValueError,TypeError,KeyError,OverflowError):
+                    return _SpentApproval("stored signer evidence unverifiable")
+            elif kid is not None or receipt_json is not None:
+                return _SpentApproval("partial operator signature metadata")
             until = datetime.fromtimestamp(deadline / 1000, tz=timezone.utc).isoformat()
             return (
                 AuthorityEvidence(**asdict(request),not_after=until),
                 ConsentEvidence(**asdict(request),not_after=until),
             )
-        # The expired/mismatched attempt must COMMIT its spent tombstone.
         result = self._transaction(consume_tx)
         if isinstance(result, _SpentApproval):
             raise PolicyDenied(str(result))
