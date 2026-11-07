@@ -170,6 +170,57 @@ class AuthenticatedAdvisoryTests(unittest.TestCase):
         # Revoked key ID cannot be verified. Old MAC does not create a grant.
         self.assertEqual(self.verdict(self.make(), trusted_keys={}).disposition, "DENY")
 
+    def test_signed_risk_cannot_cross_subject_or_action_boundary(self):
+        # Independent authorization of a different action is NOT enough.
+        # Only an envelope bound to this exact principal and effect qualifies.
+        env = self.make()
+        for field, replacement in (
+            ("subject_issuer", "https://different.example.invalid"),
+            ("subject_id", "different-principal"),
+            ("action", "service.delete"),
+            ("resource", "service:private"),
+            ("audience", "another-relying-party"),
+        ):
+            with self.subTest(field=field):
+                other = replace(self.req, **{field: replacement})
+                other_authority = AuthorityEvidence(**asdict(other), not_after=iso(45))
+                other_consent = ConsentEvidence(**asdict(other), not_after=iso(45))
+                result = self.verdict(
+                    env, request=other, authority=other_authority,
+                    consent=other_consent,
+                )
+                self.assertEqual(result.disposition, "DENY")
+                self.assertFalse(result.authoritative)
+
+    def test_authenticated_format_version_and_binding_cannot_be_downgraded(self):
+        env = self.make()
+        self.assertEqual(env["schema"], "phicloud.anc.authenticated.v2")
+        self.assertEqual(len(env["request_binding"]), 64)
+        self.assertNotIn(self.req.subject_id, json.dumps(env))
+        self.assertNotIn(self.req.resource, json.dumps(env))
+        variants = [
+            dict(env, schema="phicloud.anc.authenticated.v1"),
+            {k: v for k, v in env.items() if k != "request_binding"},
+            dict(env, request_binding="0" * 64),
+            dict(env, request_binding=True),
+        ]
+        for changed in variants:
+            with self.subTest(changed=changed.get("schema")):
+                self.assertEqual(self.verdict(changed).disposition, "DENY")
+
+    def test_binding_is_canonical_and_key_dependent(self):
+        env = self.make()
+        other_env = self.make()
+        self.assertEqual(env["request_binding"], other_env["request_binding"])
+        self.assertNotEqual(
+            env["request_binding"],
+            sign_local_advisory(
+                risk(self.req), request=self.req,
+                producer_id=PRODUCER, kid=KID,
+                secret=secrets.token_bytes(32), now=NOW,
+            )["request_binding"]
+        )
+
     def test_anti_replay_is_thread_safe(self):
         from concurrent.futures import ThreadPoolExecutor
         env = self.make()
