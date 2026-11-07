@@ -69,3 +69,12 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Every sealed request gets fresh real resource-specific Keycloak introspection and exact `phicloud.sealed.read` / `phicloud.sealed.write` scopes, plus tenant membership and individual owner checks. Other users' sealed marker IDs must be indistinguishable from nonexistent IDs.
 - Writes have exact action headers, origin protections and **no body or owner field**. R8/R9 tenant revocation must purge revoked owners' encrypted markers within the same SQLite transaction; no cloud data or real user files involved.
 - R10 is NOT full-database encryption, recovery escrow, KMS, envelope encryption, customer data protection or production key rotation. Key loss is permanent for test canaries; do not claim otherwise.
+
+## R11 envelope-encrypted synthetic marker constraints
+
+- **Synthetic canary ONLY**, opt-in nonproduction localhost feature. Do not accept file uploads, user plaintext, mail, PhiVault/OS contents, real accounts, or device effects. Every R11 marker has a distinct random 256-bit DEK and separate independent 256-bit operator KEK, both encrypted/wrapped with pinned AESGCM and domain-separated AAD.
+- Bind ciphertext and wrapped DEKs to exact verified owner, tenant, ID and lifetime, with 96-bit random nonces for both AEAD stages. Never log, serialize into an API, or persist unwrapped DEKs/KEKs. Only R11 synthetic payloads are encrypted; never claim full database encryption.
+- R11 server requires exact `phicloud.envelope.read/write` scopes and audience with fresh Keycloak introspection, current tenant membership and record ownership. No token, consent or Pocket/PhiShield signature alone grants storage or local effect authority.
+- Offline KEK rotation holds the exclusive R8 SQLite process lease. Verify **every** old wrap and payload before atomic rewrap; update the active key fingerprint in the same transaction. Leave payload ciphertext unchanged, preserve old key file, and fail closed on any corruption or SQL rollback.
+- R8/R9 offline tenant revoke/reconcile must purge all affected wrapped DEKs in that tenant as well as R10 ciphertext, even when optional R11 endpoints are off. Never auto-restore revoked membership or plaintext.
+- R11 cannot recover a lost KEK, attest hardware key custody, defeat restoration of both old KEK and SQLite, provide user-controlled key export or protect real files. External key-rotation witness and production recovery design are separate work.

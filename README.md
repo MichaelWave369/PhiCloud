@@ -40,6 +40,14 @@ See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contra
 
 PhiID and PhiMail now share a **local development OIDC issuer** through independent clients. PhiCloud still exposes **no identity gateway or mail API**; see [R2 verified-identity boundary](docs/PHIMAIL_IDENTITY_R2.md).
 
+## R11: Per-marker envelope encryption and offline rewrap (synthetic only)
+
+The next optional local security proof creates a **different 256-bit data-encryption key for every synthetic marker**, encrypts the fixed marker under that key using AES-256-GCM, then wraps the DEK with an operator-provisioned 256-bit KEK. Both stages authenticate exact tenant, verified owner, ID and timestamps.
+
+An offline operator can atomically **rewrap** the DEKs with a new independently stored KEK without re-encrypting payload ciphertext. The old KEK stops opening the rotated database; a failed rotation leaves the old KEK valid. R8/R9 tenant revocation purges affected wrapped DEKs. All storage is fixed synthetic metadata, default OFF, and no public key-rotation API or user-file upload exists.
+
+See [R11 key custody, scoped endpoints, recovery limits and test requirements](docs/R11_ENVELOPE_KEY_ROTATION.md).
+
 ## R10: AES-256-GCM synthetic owner-bound markers (private local demo)
 
 R10 adds a separately opted-in **encrypted synthetic canary** route. The server uses AES-256-GCM with tenant/owner/record authenticated data, a 256-bit key provisioned offline into an independent private key directory, fresh Keycloak introspection, and independent `phicloud.sealed.read` / `phicloud.sealed.write` scope checks. Tampering, wrong keys and missing keys fail closed, and offline tenant revocation removes that member's sealed markers.

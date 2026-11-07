@@ -516,12 +516,22 @@ class LocalTenantStore:
         has_table = self._db.execute(
             "SELECT 1 FROM sqlite_master"
             " WHERE type='table' AND name='sealed_markers'").fetchone()
-        if not has_table:
-            return 0
-        return self._db.execute(
-            "DELETE FROM sealed_markers WHERE tenant_id=? AND owner_key=?",
-            (tenant_id, key)
-        ).rowcount
+        removed = 0
+        if has_table:
+            removed += self._db.execute(
+                "DELETE FROM sealed_markers WHERE tenant_id=? AND owner_key=?",
+                (tenant_id, key)
+            ).rowcount
+        # R11 is an independent, default-off envelope demo. Offline tenant
+        # revocation purges its DEK envelopes even if R11 isn't enabled.
+        if self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table'"
+            " AND name='envelope_markers'").fetchone():
+            removed += self._db.execute(
+                "DELETE FROM envelope_markers WHERE tenant_id=? AND owner_key=?",
+                (tenant_id, key)
+            ).rowcount
+        return removed
 
     def _require_member(self, tenant_id: str, key: str) -> None:
         if self._fence is not None and (tenant_id, key) in self._fence.records:

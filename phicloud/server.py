@@ -18,6 +18,8 @@ from .authz import (
 )
 from .owner_demo import DemoStoreFull, OwnerDemoStore, SCHEMA as OWNER_SCHEMA
 from .sealed_demo import SealedDataUnavailable, create_sealed_demo, SCHEMA as SEALED_SCHEMA
+from .envelope_demo import (EnvelopeIntegrityError, create_envelope_demo,
+                            SCHEMA as ENVELOPE_SCHEMA)
 from .tenant_store import (LocalTenantError, LocalTenantCapacity, LocalTenantConfigError,
                            create_tenant_store, TENANT_SCHEMA)
 
@@ -25,7 +27,7 @@ DEFAULT_MANIFEST = Path(__file__).resolve().parent.parent / "config" / "services
 LOOPBACK = "127.0.0.1"
 
 
-def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store=None, sealed_store=None):
+def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store=None, sealed_store=None, envelope_store=None):
     """Factory returns a request handler with a validated, immutable startup snapshot."""
     snapshot = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -52,6 +54,9 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store
                 self._reply(200, snapshot)
             elif requested.path == "/v1/private/profile" and authorizer is not None:
                 self._private_profile()
+            elif (envelope_store is not None and requested.path.startswith("/v1/private/tenants/")
+                  and "/envelope-markers" in requested.path):
+                self._envelope_request("read", requested.path)
             elif (sealed_store is not None and requested.path.startswith("/v1/private/tenants/")
                   and "/sealed-markers" in requested.path):
                 self._sealed_request("read", requested.path)
@@ -66,6 +71,13 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store
 
         def do_POST(self) -> None:  # noqa: N802
             requested = urlsplit(self.path)
+            if (envelope_store is not None and requested.path.startswith("/v1/private/tenants/")
+                    and "/envelope-markers" in requested.path):
+                if requested.query or requested.fragment:
+                    self._reply(404, b'{"error":"not_found"}')
+                else:
+                    self._envelope_request("create", requested.path)
+                return
             if (sealed_store is not None and requested.path.startswith("/v1/private/tenants/")
                     and "/sealed-markers" in requested.path):
                 if requested.query or requested.fragment:
@@ -87,6 +99,13 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store
 
         def do_DELETE(self) -> None:  # noqa: N802
             requested = urlsplit(self.path)
+            if (envelope_store is not None and requested.path.startswith("/v1/private/tenants/")
+                    and "/envelope-markers" in requested.path):
+                if requested.query or requested.fragment:
+                    self._reply(404, b'{"error":"not_found"}')
+                else:
+                    self._envelope_request("delete", requested.path)
+                return
             if (sealed_store is not None and requested.path.startswith("/v1/private/tenants/")
                     and "/sealed-markers" in requested.path):
                 if requested.query or requested.fragment:
@@ -353,6 +372,70 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store
             except Exception:
                 self._reply(503, b'{"error":"sealed_demo_unavailable"}')
 
+        def _envelope_request(self, operation: str, path: str) -> None:
+            """Only synthetic canaries; no payload/file operations, ever."""
+            match = re.fullmatch(
+                r"/v1/private/tenants/([a-z][a-z0-9-]{2,31})/"
+                r"envelope-markers(?:/([A-Za-z0-9_-]{24,64}))?", path
+            )
+            if not match:
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            tenant, marker_id = match.groups()
+            if ((operation == "create" and marker_id is not None)
+                    or (operation == "delete" and marker_id is None)):
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            if not self._require_local():
+                return
+            if operation != "read":
+                expected = ("create-envelope-test-marker" if operation == "create"
+                            else "delete-envelope-test-marker")
+                origin = self.headers.get_all("Origin", [])
+                expected_origin = f"http://{LOOPBACK}:{self.server.server_port}"
+                if (len(origin) > 1 or (origin and origin != [expected_origin]) or
+                        self.headers.get_all("X-PhiCloud-Action", []) != [expected]):
+                    self._reply(403, b'{"error":"explicit_local_action_required"}')
+                    return
+                lengths = self.headers.get_all("Content-Length", [])
+                if (self.headers.get_all("Transfer-Encoding") or
+                        len(lengths) > 1 or (lengths and lengths != ["0"]) or
+                        self.headers.get_all("Content-Type")):
+                    self._reply(413, b'{"error":"body_not_accepted"}')
+                    self.close_connection = True
+                    return
+            scope = ("phicloud.envelope.read" if operation == "read"
+                     else "phicloud.envelope.write")
+            principal = self._authorize_demo(scope)
+            if principal is None:
+                return
+            try:
+                if operation == "create":
+                    item = envelope_store.create(principal, tenant)
+                    self._reply(201, json.dumps(item, separators=(",", ":")).encode())
+                elif operation == "delete":
+                    envelope_store.delete_own(principal, tenant, marker_id)
+                    self._reply(200, b'{"deleted":true,"synthetic_only":true}')
+                elif marker_id is None:
+                    items = envelope_store.list_own(principal, tenant)
+                    reply = {"schema": ENVELOPE_SCHEMA, "tenant": tenant,
+                             "records": items, "synthetic_only": True}
+                    self._reply(200, json.dumps(reply, separators=(",", ":")).encode())
+                else:
+                    item = envelope_store.read_own(principal, tenant, marker_id)
+                    if item is None:
+                        self._reply(404, b'{"error":"not_found"}')
+                    else:
+                        self._reply(200, json.dumps(item, separators=(",", ":")).encode())
+            except LocalTenantError:
+                self._reply(404, b'{"error":"not_found"}')
+            except LocalTenantCapacity:
+                self._reply(429, b'{"error":"local_synthetic_capacity"}')
+            except EnvelopeIntegrityError:
+                self._reply(503, b'{"error":"envelope_integrity_failed"}')
+            except Exception:
+                self._reply(503, b'{"error":"envelope_demo_unavailable"}')
+
         def _private_profile(self) -> None:
             """One read-only resource: actual server-side introspection each time.
 
@@ -426,8 +509,14 @@ def main(argv: list[str] | None = None) -> int:
             tenant_store.close()
         parser.error("sealed_demo_key_unavailable_or_invalid")
     try:
+        envelope_store = create_envelope_demo(tenant_store)
+    except (LocalTenantConfigError, ValueError):
+        if tenant_store:
+            tenant_store.close()
+        parser.error("envelope_demo_key_unavailable_or_invalid")
+    try:
         server = ThreadingHTTPServer((LOOPBACK, args.port),
-                make_handler(manifest, authorizer, owner_store, tenant_store, sealed_store))
+                make_handler(manifest, authorizer, owner_store, tenant_store, sealed_store, envelope_store))
     except Exception:
         if tenant_store:
             tenant_store.close()
@@ -438,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         print("R4 ephemeral owner isolation demo enabled" if owner_store else "R4 owner demo disabled")
         print("R6 private synthetic tenant store enabled" if tenant_store else "R6 tenant store disabled")
         print("R10 sealed synthetic canary enabled" if sealed_store else "R10 sealed demo disabled")
+        print("R11 envelope synthetic canary enabled" if envelope_store else "R11 envelope demo disabled")
         print("No hosted accounts, mail delivery, remote service discovery or cloud storage.")
         try:
             server.serve_forever()
