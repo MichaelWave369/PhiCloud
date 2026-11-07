@@ -1,3 +1,5 @@
 # Optional R7 operator signature verifier; R0-R6 core stays stdlib only.
 # Pinned to a reviewed 2026 release. The private signing key is never stored here.
 cryptography==50.0.2
+# Vetted WebAuthn origin/RP/challenge/signature and user-verification checks.
+webauthn==3.0.1
