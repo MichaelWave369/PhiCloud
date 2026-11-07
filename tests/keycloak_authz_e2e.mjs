@@ -286,7 +286,7 @@ async function exercise(admin, user, bob, secret) {
 
     const owners=await exerciseOwnerIsolation(user,bob,valid);
 
-    console.log('R3/R4: revoke Alice's Keycloak session; Bob must retain own records');
+    console.log("R3/R4: revoke Alice's Keycloak session; Bob must retain own records");
     const logout=await fetchAdmin(admin,'users/'+user.userId+'/logout',{method:'POST'});
     await assertStatus(logout,204,'Keycloak test user logout failed');
     // Keycloak token introspection must reflect session invalidation. No cache.
