@@ -5,6 +5,7 @@ Private keys in these tests are disposable fixtures, never persisted.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import secrets
 import sqlite3
@@ -275,6 +276,67 @@ class SignedOperatorApprovalTests(unittest.TestCase):
             self.policy.register_operator_key(
                 operator_id="operator-local",kid="key-c",public_key=b"x"*31
             )
+
+
+    def test_revoked_public_bytes_cannot_get_new_key_identity(self):
+        self.fresh().revoke_operator_key(
+            operator_id="operator-local",kid="key-a"
+        )
+        with self.assertRaises(PolicyDenied):
+            self.fresh().register_operator_key(
+                operator_id="operator-local",kid="fresh-label",
+                public_key=public_bytes(self.signer),
+            )
+
+    def test_r6_database_schema_migrates_without_losing_unsigned_approvals(self):
+        """V1 existing owner/request records are preserved, not relabeled signed."""
+        legacy=self.folder/"legacy.sqlite3"
+        old=EffectRequest(
+            request_id="r6-legacy-approval",scope="pre_service",
+            subject_issuer=ISSUER,subject_id="signed-owner",
+            audience=AUDIENCE,action="profile.read",
+            resource="profile:synthetic-self",
+        )
+        with sqlite3.connect(legacy) as conn:
+            conn.execute("""CREATE TABLE owners(
+                issuer TEXT NOT NULL,subject TEXT NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),
+                PRIMARY KEY(issuer,subject))""")
+            conn.execute("""CREATE TABLE requests(
+                review_id TEXT NOT NULL UNIQUE,issuer TEXT NOT NULL,
+                subject TEXT NOT NULL,request_id TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                state TEXT NOT NULL CHECK(state IN ('pending','approved','spent')),
+                review_until_ms INTEGER NOT NULL,approval_until_ms INTEGER,
+                PRIMARY KEY(issuer,subject,request_id),
+                FOREIGN KEY(issuer,subject) REFERENCES owners(issuer,subject))""")
+            conn.execute(
+                "INSERT INTO owners(issuer,subject,revoked) VALUES(?,?,0)",
+                (ISSUER,"signed-owner"),
+            )
+            expiry=int((self.now+timedelta(seconds=20)).timestamp()*1000)
+            conn.execute("""INSERT INTO requests(
+                review_id,issuer,subject,request_id,request_json,state,
+                review_until_ms,approval_until_ms
+                ) VALUES(?,?,?,?,?,'approved',?,?)""",
+                (
+                    "legacy-review",ISSUER,"signed-owner",old.request_id,
+                    json.dumps(asdict(old),sort_keys=True,separators=(",",":")),
+                    expiry,expiry,
+                ),
+            )
+            conn.execute("PRAGMA user_version=1")
+        migrated=DurableOwnerConsentPolicy(legacy)
+        with sqlite3.connect(legacy) as conn:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0],2)
+            self.assertIn("signed_receipt",{
+                r[1] for r in conn.execute("PRAGMA table_info(requests)")
+            })
+        self.assertEqual(
+            migrated.consume(old,now=self.now)[0].request_id,old.request_id,
+        )
+        with self.assertRaises(PolicyDenied):
+            migrated.consume(old,now=self.now,require_signed=True)
 
     def test_stored_receipt_cannot_be_changed_without_signature_denial(self):
         ticket=self.stage()
