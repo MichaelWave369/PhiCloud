@@ -4,7 +4,7 @@
  * No mailbox, PhiVault files, OS effects or public identity endpoints.
  */
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import {createRequire} from 'node:module';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -263,6 +263,51 @@ async function runTests(adminToken,alice,bob,secret){
         'delete-tenant-test-record'),200);
       await check(await request(bobRead,'GET',url('alpha-team','records/'+bobId)),404);
     });
+    console.log('R8: offline operator removal, no leaked subject in argv or output');
+    const operatorInput=JSON.stringify({
+      schema:'phicloud.local-tenant-operator-request.v0.1',
+      tenant:'alpha-team',
+      member:{iss:ISSUER,sub:bob.userId},
+      acknowledge:'REVOKE alpha-team',
+    });
+    const cmd=['-m','phicloud.tenant_operator','--db',path,'--apply'];
+    const operatorEnv={
+      ...process.env,
+      PHICLOUD_TENANT_OPERATOR_DEV:'1',
+      PHICLOUD_ENV:'test',
+      NODE_ENV:'test',
+    };
+    const removed=spawnSync('python',cmd,{
+      input:operatorInput,encoding:'utf8',
+      env:operatorEnv,timeout:9000,
+    });
+    assert.equal(removed.status,0,'offline operator must revoke verified local member');
+    const result=JSON.parse(removed.stdout);
+    assert.equal(result.schema,'phicloud.local-tenant-operator-result.v0.1');
+    assert.equal(result.changed,true);
+    assert.equal(result.external_token_revoked,false);
+    assert.equal(result.tenant,'alpha-team');
+    assert.equal(result.removed_markers,0,'Alice deleted and Bob deleted their own alpha markers');
+    assert.ok(!removed.stdout.includes(bob.userId));
+    assert.ok(!removed.stdout.includes(ISSUER));
+    const again=spawnSync('python',cmd,{
+      input:operatorInput,encoding:'utf8',
+      env:operatorEnv,timeout:9000,
+    });
+    assert.equal(again.status,0);
+    assert.equal(JSON.parse(again.stdout).changed,false);
+
+    console.log('R8: still-active Keycloak bearer cannot resurrect removed tenant membership');
+    await withPython(path,secret,null,async()=>{
+      await check(await request(bobRead,'GET',url('alpha-team')),404,
+        'valid bearer no longer grants removed tenant membership');
+      await check(await request(bobWrite,'POST',url('alpha-team'),
+        'create-tenant-test-record'),404,
+        'valid write scope does not regrant membership');
+      await check(await request(bobRead,'GET',url('beta-team','records/'+betaId)),200,
+        'unrelated tenant membership must remain usable');
+    });
+    console.log('PASS: R8 offline operator revocation survives restart, denies still-active scoped token, preserves other tenant');
     console.log('PASS: real Keycloak two-subject tenant membership, owner isolation, scoped operations, durable deletes/audit, restart and independent revocation');
     console.log('BOUNDARY: no PhiVault files, user-supplied content, hosted storage, email or PhiOS actions');
   }finally{

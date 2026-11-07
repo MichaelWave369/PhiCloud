@@ -42,3 +42,11 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Preserve atomic create/delete+audit semantics, owner-isolated bounded history, 30-day record expiry, 90-day audit expiry and capacity ceilings. Recheck upstream token validity on every resource request.
 - Keep R0 service inventory, R4 ephemeral owner demo, PhiShield consent flows and standalone/offline PhiOS independent. Use a distinct R6 Keycloak workflow rather than overwriting concurrent R5 consent tests.
 - Never claim the private SQLite audit is tamper-evident, encrypted, multi-process reliable, backed up, production-ready or appropriate for personal data.
+
+## R8 offline tenant revocation safety
+
+- Offline tenant membership revoke **never** comes from a public HTTP request, PhiID browser consent, R7 operator signature, or cloud token alone. Only a trusted local operator with access to the existing private SQLite fixture can invoke the opted-in CLI.
+- Both the PhiCloud server and offline operator hold the same nonblocking, owner-private exclusive POSIX lock file. Refuse a second process; never unlink/recreate the lock file while the service may be active.
+- Require explicit per-tenant typed confirmation in stdin JSON before an irreversible local revoke; no subject/email/token in argv, logs or response. Don't accept additional, duplicate or unrecognized request fields.
+- Atomically remove only that member's records and membership in one tenant; persist a local revocation tombstone. Do not remove other people's records or unrelated tenant memberships. Revoke remains effective against active Keycloak tokens because every HTTP request checks server-side membership after token introspection.
+- IdP logout/token revocation, production account deletion, backups/restore protection, cloud object deletion and real user file erasure are out of scope. Never represent this local test fixture as tamper-evident or suitable for production personal data.

@@ -82,3 +82,13 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [x] Add distinct real Keycloak workflow with two independent test users, server restarts and deletion/audit verification
 - [ ] Verify all independent R6, existing R3, PhiShield and ANC CI checks pass after PR review
 - [ ] Design encrypted tenant-aware database, account recovery, operator membership lifecycle and backed-up audit **before any real user file storage**
+
+## R8: Offline one-way membership removal and no-resurrection verification
+
+- [x] Add a private shared exclusive database lease, blocking service and offline operator from overlapping on the same SQLite test file
+- [x] Add opt-in, nonproduction stdin-only operator preview and explicit per-tenant confirmation before apply
+- [x] Atomically purge one member's synthetic markers and remove membership in the selected tenant, preserving other owners and private audit
+- [x] Write durable revocation tombstone; fail closed on re-grant anomaly, allow safe repeat revoke
+- [x] Extend real two-user Keycloak integration to prove still-active token cannot resurrect removed membership after restart
+- [ ] Obtain all CI checks green and review after other active PhiCloud PRs merge
+- [ ] Design production-safe tenant lifecycle, backup-aware revocation and real file data protection separately
