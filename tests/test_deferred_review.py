@@ -67,7 +67,7 @@ def request(id="r12-preview",sub="synthetic-operator-owner"):
 
 def keycloak_stub():
     def introspect(token,secret):
-        if token!="r12-test-token" or secret!="r12-disposable-fixture-confidential-secret-0123456789abcdef":
+        if token!="r12-disposable-test-access-token-0123456789" or secret!="r12-disposable-fixture-confidential-secret-0123456789abcdef":
             raise RuntimeError("wrong synthetic token")
         from time import time
         return {
@@ -178,7 +178,7 @@ class DeferredOperatorReviewTests(unittest.TestCase):
     def test_preview_from_fresh_live_oidc_not_from_browser_claims(self):
         gate=keycloak_stub()
         preview=stage_verified_operator_preview(
-            "r12-test-token",request_id="new-r12-verified",
+            "r12-disposable-test-access-token-0123456789",request_id="new-r12-verified",
             introspector=gate,policy=self.policy,now=self.now,
         )
         self.assertEqual(preview.request.subject_id,"synthetic-operator-owner")
