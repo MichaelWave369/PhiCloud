@@ -16,9 +16,6 @@ import stat
 import sys
 from pathlib import Path
 
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
 from .tenant_store import LocalTenantConfigError, LocalTenantError, LocalTenantCapacity
 
 SCHEMA = "phicloud.local-sealed-marker/0.1"
@@ -107,6 +104,10 @@ def read_local_key(path: str | Path, db_path: str | Path) -> bytes:
 
 class SealedDemoStore:
     def __init__(self, tenant_store, key_path: str | Path):
+        # The default R0 public registry and R6 tenant store remain stdlib
+        # only. Load the pinned optional crypto dependency when R10 is on.
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
         self._store = tenant_store
         key = read_local_key(key_path, tenant_store.path)
         self._aead = AESGCM(key)
@@ -159,6 +160,8 @@ class SealedDemoStore:
                 or type(ciphertext) is not bytes or len(ciphertext) > 1024
                 or len(ciphertext) < 16):
             raise SealedDataUnavailable("corrupt_encrypted_marker")
+        from cryptography.exceptions import InvalidTag
+
         try:
             plaintext = self._aead.decrypt(
                 nonce, ciphertext, self._aad(tenant, owner, marker_id, created, expires)
