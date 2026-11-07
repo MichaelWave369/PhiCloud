@@ -1,0 +1,80 @@
+name: PhiCloud R3 real Keycloak resource authorization
+
+on:
+  pull_request:
+    paths:
+      - 'phicloud/**'
+      - 'tests/**'
+      - '.github/workflows/keycloak-authz.yml'
+      - 'docs/R3_*'
+  push:
+    branches: [main]
+    paths:
+      - 'phicloud/**'
+      - 'tests/**'
+      - '.github/workflows/keycloak-authz.yml'
+      - 'docs/R3_*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-resource-authorization:
+    name: Keycloak token introspection and revocation
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    steps:
+      - name: Checkout PhiCloud
+        uses: actions/checkout@v4
+
+      - name: Checkout reviewed PhiID test fixture
+        uses: actions/checkout@v4
+        with:
+          repository: MichaelWave369/PhiID
+          ref: 1dac6a8dc89214debe126498bffbf700aaa0cef5
+          path: integration/phiid
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install fixture OIDC dependencies
+        working-directory: integration/phiid
+        run: npm install --no-audit --no-fund
+
+      - name: Python and JavaScript safety preflight
+        run: |
+          python -m compileall -q phicloud tests
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          node --check tests/keycloak_authz_e2e.mjs
+
+      - name: Generate one-time private Keycloak admin password
+        shell: bash
+        run: |
+          set -euo pipefail
+          pass="$(openssl rand -hex 32)"
+          echo "::add-mask::${pass}"
+          {
+            echo "KC_BOOTSTRAP_ADMIN_USERNAME=ci-admin"
+            echo "KC_BOOTSTRAP_ADMIN_PASSWORD=${pass}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Start disposable pinned Keycloak realm
+        run: docker compose -f integration/phiid/dev/keycloak/compose.yaml up -d
+
+      - name: Real access-token authorization and revocation checks
+        env:
+          PHIID_E2E_ENABLE: '1'
+          PHICLOUD_REAL_E2E: '1'
+          NODE_ENV: test
+        run: node tests/keycloak_authz_e2e.mjs
+
+      - name: Stop disposable Keycloak regardless of test result
+        if: always()
+        run: docker compose -f integration/phiid/dev/keycloak/compose.yaml down --remove-orphans
