@@ -50,6 +50,22 @@ The new `/v1/private/profile` route returns only a pseudonymous, *synthetic loca
 
 See [R3 scope, setup, real-provider CI and limitations](docs/R3_LOCAL_OAUTH_GATE.md).
 
+## R4: verified PhiID identity → PhiShield (development only)
+
+The [R4 local identity-to-PhiShield bridge](docs/R4_PHIID_SHIELD_BRIDGE.md)
+now derives a **fixed synthetic profile-read** action directly from a
+freshly Keycloak-introspected PhiID access token. A separate consent
+verifier and signed ANC advisory are required before the reference
+policy can return a non-authoritative `CANDIDATE`.
+
+The real-Keycloak CI workflow checks actual login, missing consent,
+wrong scope/audience and upstream revocation. Consent and risk signing
+in this test are disposable **synthetic fixtures**, not proof of live
+human consent or a deployed ANC security service.
+
+This adds **no** public policy API, general resource authority, mail/file
+access, or device control. Login never grants PhiOS effects.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
