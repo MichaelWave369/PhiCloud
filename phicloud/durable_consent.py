@@ -96,17 +96,20 @@ class DurableOwnerConsentPolicy:
     def _transaction(self, callback):
         with self._lock:
             try:
-                with self._open() as conn:
+                conn = self._open()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
                     try:
-                        conn.execute("BEGIN IMMEDIATE")
                         result = callback(conn)
-                        conn.execute("COMMIT")
-                        return result
                     except BaseException:
                         if conn.in_transaction:
                             conn.execute("ROLLBACK")
                         raise
-            except sqlite3.Error as exc:
+                    conn.execute("COMMIT")
+                    return result
+                finally:
+                    conn.close()
+            except (sqlite3.Error, OSError) as exc:
                 raise PolicyDenied("local policy storage unavailable") from exc
 
     def _initialize(self) -> None:
@@ -286,7 +289,7 @@ class DurableOwnerConsentPolicy:
                 WHERE issuer=? AND subject=? AND request_id=?
             """, (request.subject_issuer,request.subject_id,request.request_id))
             if saved != _request_json(request) or _milliseconds(instant) >= deadline:
-                raise _SpentApproval("mismatched or expired approval")
+                return _SpentApproval("mismatched or expired approval")
             until = datetime.fromtimestamp(deadline / 1000, tz=timezone.utc).isoformat()
             return (
                 AuthorityEvidence(**asdict(request),not_after=until),
