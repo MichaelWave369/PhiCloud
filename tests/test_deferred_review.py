@@ -67,7 +67,7 @@ def request(id="r12-preview",sub="synthetic-operator-owner"):
 
 def keycloak_stub():
     def introspect(token,secret):
-        if token!="r12-test-token" or secret!="r12-test-secret":
+        if token!="r12-test-token" or secret!="r12-disposable-fixture-confidential-secret-0123456789abcdef":
             raise RuntimeError("wrong synthetic token")
         from time import time
         return {
@@ -76,7 +76,7 @@ def keycloak_stub():
             "exp":int(time())+500,"nbf":int(time())-1,
             "token_type":"Bearer",
         }
-    return LocalTokenIntrospector("r12-test-secret",transport=introspect)
+    return LocalTokenIntrospector("r12-disposable-fixture-confidential-secret-0123456789abcdef",transport=introspect)
 
 
 class DeferredOperatorReviewTests(unittest.TestCase):
