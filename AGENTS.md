@@ -60,3 +60,12 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Any still-active Keycloak token must remain blocked by server-side membership checks, even after an offline recovery. Keep explicit route scopes and per-resource ownership intact.
 - Never log raw OIDC subjects, credentials, bearer tokens, private file locations, or raw witness entries. No real cloud files, production backups, mailbox data, personal information, or PhiOS effects in this fixture.
 - A witness-only rollback guard is insufficient for multi-node deployments, backup integrity, encryption, adversarial host tampering or production account restoration. Those require independently protected recovery design and review.
+
+## R10 encrypted synthetic marker security invariants
+
+- R10 is a **disabled-by-default synthetic canary only**. Never accept user-provided plaintext, file paths, mail, PhiVault data, credentials, OAuth tokens, wallet or PhiOS device effects through these endpoints.
+- AES-256-GCM uses random nonces and authenticated associated data binding exact tenant, verified owner pseudonym, marker ID and timestamps. Do not roll your own crypto. The pinned `cryptography` package supplies AESGCM; never expose ciphertext or decryption keys to a browser or log.
+- Key file is an independent 32-byte random value in a separate POSIX owner-private directory, provisioned explicitly offline with a private DB lock. Key must NEVER appear in SQLite, source, backups in the same directory, logs or a static website. A wrong/missing/broadly readable/symlink key fails closed, not silently replaced.
+- Every sealed request gets fresh real resource-specific Keycloak introspection and exact `phicloud.sealed.read` / `phicloud.sealed.write` scopes, plus tenant membership and individual owner checks. Other users' sealed marker IDs must be indistinguishable from nonexistent IDs.
+- Writes have exact action headers, origin protections and **no body or owner field**. R8/R9 tenant revocation must purge revoked owners' encrypted markers within the same SQLite transaction; no cloud data or real user files involved.
+- R10 is NOT full-database encryption, recovery escrow, KMS, envelope encryption, customer data protection or production key rotation. Key loss is permanent for test canaries; do not claim otherwise.
