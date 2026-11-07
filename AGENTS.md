@@ -78,3 +78,11 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Offline KEK rotation holds the exclusive R8 SQLite process lease. Verify **every** old wrap and payload before atomic rewrap; update the active key fingerprint in the same transaction. Leave payload ciphertext unchanged, preserve old key file, and fail closed on any corruption or SQL rollback.
 - R8/R9 offline tenant revoke/reconcile must purge all affected wrapped DEKs in that tenant as well as R10 ciphertext, even when optional R11 endpoints are off. Never auto-restore revoked membership or plaintext.
 - R11 cannot recover a lost KEK, attest hardware key custody, defeat restoration of both old KEK and SQLite, provide user-controlled key export or protect real files. External key-rotation witness and production recovery design are separate work.
+
+## R12 independently witnessed synthetic KEK rotation
+
+- Enroll a witness only by trusted offline operator with the shared R8 SQLite process lock. Keep it in a separate owner-private directory from both database and KEKs. Require strict 0600, no symlinks, random database binding, one-time O_EXCL enrollment and fsync. Never log raw key material or account secrets.
+- An R11 database enrolled with R12 MUST fail closed if witness is absent, corrupt, mismatched, behind/ahead, or supplies an old KEK matching stale SQLite. Setting no flag must never silently bypass an enrolled R11 key epoch during its startup.
+- Verify ALL existing wraps and fixed synthetic payloads before appending the new witness epoch. Append and fsync independent epoch transition BEFORE atomic SQLite KEK rewrap and active-key update. Any crash afterward blocks normal startup until exact offline pending reconciliation.
+- Resume permits only the witness's latest one-step (old→new) transition when DB still has exactly that previous active key. Never change witnesses during resume; never auto-regrant tenant membership, accept arbitrary rewrap skips, or bypass R9 revocation witness.
+- R12 is an accidental/partial-backup rollback guard, NOT production KMS/HSM, tamper-evident hardware counter, protection if old witness is restored, or actual PhiVault file encryption. Do not connect user content, hosted cloud accounts or PhiOS effects.
