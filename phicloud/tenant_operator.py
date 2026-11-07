@@ -92,10 +92,10 @@ def execute(argv=None, *, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
         finally:
             store.close()
         print(json.dumps({
-            "schema": OUTPUT_SCHEMA,
             "mode": "apply" if args.apply else "preview",
             # Never echo raw issuer/sub or subject hashes, even to the local CLI.
             **result,
+            "schema": OUTPUT_SCHEMA,
         }, sort_keys=True, separators=(",", ":")), file=stdout)
         return 0
     except (LocalTenantConfigError, LocalTenantError, OSError, ValueError) as exc:
