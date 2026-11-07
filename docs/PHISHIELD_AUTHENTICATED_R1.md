@@ -63,7 +63,8 @@ approval for local device effects.
 - A verified MAC never makes `authority_granted=true` valid, elevates
   coherence to a capability, grants consent, or authorizes an OS effect.
 - The signed canonical JSON binds producer, key ID, audience, request ID,
-  scope, 128-bit random nonce, complete keyed request binding, issuance/expiry\nand the entire ANC advisory.
+  scope, 128-bit random nonce, complete keyed request binding, issuance/expiry
+  and the entire ANC advisory.
   Extra/missing fields, invalid keys, expired envelopes and mismatched
   fields are denied.
 - The one-use nonce cache is guarded by a lock and has finite capacity.
