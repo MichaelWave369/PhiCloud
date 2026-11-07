@@ -10,6 +10,7 @@ import http.client
 import json
 import os
 import secrets
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -26,7 +27,7 @@ from phicloud.operator_enrollment import (
 )
 from phicloud.webauthn_presence import RP_ID,ORIGIN
 from phicloud.shield_policy import EffectRequest
-from tests.webauthn_fixture import (
+from webauthn_fixture import (
     SyntheticAuthenticator,ed25519_public_bytes,sign_review,
 )
 
@@ -87,7 +88,7 @@ class LocalOperatorEnrollmentTests(unittest.TestCase):
             started["options"]["authenticatorSelection"]["userVerification"],
             "required",
         )
-        with DurableOwnerConsentPolicy(self.path)._open() as conn:
+        with sqlite3.connect(self.path) as conn:
             row=conn.execute(
                 "SELECT operator_id,public_key,sign_count,revoked FROM operator_credentials"
             ).fetchone()
