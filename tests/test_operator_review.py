@@ -168,26 +168,36 @@ class LocalOperatorReviewTests(unittest.TestCase):
             self.challenge(controller,preview)
 
     def test_webauthn_missing_uv_wrong_origin_or_challenge_denied(self):
+        from base64 import urlsafe_b64decode
         variants=(
             {"verified":False},
             {"present":False},
             {"origin":"https://attacker.example"},
             {"rp_id":"not-localhost"},
         )
-        for data in variants:
+        for index, data in enumerate(variants):
             with self.subTest(data=data):
-                controller,preview,options,assertion=self.approve(**data)
+                fresh=synthetic_request(request_id=f"r11-negative-{index}")
+                self.policy.register_synthetic_self(fresh)
+                ticket=self.policy.stage(fresh,now=self.now)
+                receipt=sign_review(
+                    ticket,self.signer,now=self.now,
+                    operator=OPERATOR,kid=KID,
+                )
+                controller=self.controller(receipt=receipt)
+                preview=controller.unlock(pairing_code=PAIRING,now=self.now)
+                options=self.challenge(controller,preview)
+                challenge=urlsafe_b64decode(options["challenge"]+"==")
+                assertion=self.auth.assertion(challenge,**data)
                 with self.assertRaises(PolicyDenied):
                     controller.complete(
                         session=preview["session"],assertion=assertion,now=self.now,
                     )
                 with self.assertRaises(PolicyDenied):
                     self.policy.consume(
-                        self.req,now=self.now,
+                        fresh,now=self.now,
                         require_signed=True,require_presence=True,
                     )
-                # Re-use the spent request ID is intentionally impossible.
-                break
 
     def test_wrong_passkey_challenge_is_not_accepted(self):
         controller,preview,options,_=self.approve()
