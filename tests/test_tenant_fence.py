@@ -212,15 +212,18 @@ class RecoveryWitnessTests(unittest.TestCase):
 
     def test_witness_cannot_live_in_sqlite_backup_directory_or_be_reenrolled(self):
         same_dir = Path(self.directory.name) / "witness.jsonl"
-        with self.assertRaises(WitnessError):
+        with self.assertRaisesRegex(LocalTenantConfigError,
+                                    "outside_database_backup_directory"):
             self.db.enroll_recovery_fence(same_dir)
-        # After any failed enrollment, the DB is deliberately marked. It must
-        # not start without an independent fence. A fresh fixture is required
-        # if enrollment was interrupted before a witness could be created.
-        self.db.close()
-        self.db = None
-        with self.assertRaises(LocalTenantConfigError):
-            self.db = LocalTenantStore(self.db_path)
+        # An invalid destination is a preflight error, not a crash window.
+        # Keep the DB usable. Actual interrupted enrollment after DB binding
+        # will still fail closed until investigated.
+        self.assertFalse(self.db._db.execute(
+            "SELECT 1 FROM metadata WHERE key='recovery_fence_id'").fetchone())
+        self.enroll()
+        with self.assertRaisesRegex(LocalTenantConfigError,
+                                    "already_enrolled"):
+            self.db.enroll_recovery_fence(self.witness_path)
 
     def test_unsafe_witness_symlink_and_duplicate_entries_denied(self):
         self.enroll()
