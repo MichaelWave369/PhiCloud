@@ -114,7 +114,8 @@ class SealedStoreTests(unittest.TestCase):
             "UPDATE sealed_markers SET ciphertext=? WHERE id=?", (row,a["id"])
         )
         self.tenant_store._db.execute(
-            "UPDATE sealed_markers SET tenant_id='beta-team' WHERE id=?", (a["id"],)
+            "UPDATE sealed_markers SET tenant_id='beta-team',owner_key=? WHERE id=?",
+            (self.tenant_store._owner_key(who("bob")), a["id"])
         )
         with self.assertRaises(SealedDataUnavailable):
             self.sealed.read_own(who("bob"), "beta-team", a["id"])
