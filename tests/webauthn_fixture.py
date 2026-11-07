@@ -35,6 +35,40 @@ class SyntheticAuthenticator:
             -3:public.y.to_bytes(32,"big"),
         })
 
+    def registration(
+        self, challenge, *, counter=0, verified=True, present=True,
+        origin=ORIGIN, rp_id=RP_ID, credential_id=None,
+    ):
+        """Synthetic fmt=none registration; ES256 credential public key is valid.
+
+        No attestation/hardware/human identity is claimed by this fixture.
+        """
+        cid = credential_id if credential_id is not None else self.credential_id
+        flags = (1 if present else 0) | (4 if verified else 0) | 0x40
+        auth_data = (
+            hashlib.sha256(rp_id.encode("utf-8")).digest()
+            + bytes([flags]) + counter.to_bytes(4,"big")
+            + bytes(16) + len(cid).to_bytes(2,"big") + cid
+            + self.cose_public
+        )
+        attestation = cbor2.dumps({
+            "fmt":"none", "attStmt":{}, "authData":auth_data,
+        })
+        client = json.dumps({
+            "type":"webauthn.create",
+            "challenge":b64(challenge),
+            "origin":origin,"crossOrigin":False,
+        }, separators=(",",":")).encode("utf-8")
+        return {
+            "id":b64(cid),"rawId":b64(cid),"type":"public-key",
+            "response":{
+                "attestationObject":b64(attestation),
+                "clientDataJSON":b64(client),
+                "transports":["internal"],
+            },
+            "clientExtensionResults":{},
+        }
+
     def assertion(self, challenge, *, counter=1, verified=True,
                   present=True, origin=ORIGIN, rp_id=RP_ID,
                   credential_id=None, wrong_private=None):
