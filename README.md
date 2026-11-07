@@ -92,6 +92,27 @@ human's consent. A result is still only `DENY`, `REVIEW`, or non-authoritative
 The local ledger is not durable and has no remote API. It must not be
 presented as production resource ownership or consent verification.
 
+## R6: restart-safe local approval and revocation (POSIX prototype)
+
+The [R6 SQLite-backed policy](docs/R6_DURABLE_LOCAL_CONSENT.md) adds an
+**optional** private, operator-owned ledger for the existing synthetic
+`profile.read` review flow. It preserves short-lived approved reviews,
+spent request-ID tombstones, and owner revocations across process restarts.
+A revoked owner cannot silently regain permission simply by signing in.
+
+SQLite transactions serialize approval consumption across connections and
+processes. The reference bridge still returns at most a non-authoritative
+`CANDIDATE`, never permission to execute. The Keycloak integration CI
+uses a **real disposable identity provider** with **simulated** operator
+confirmation, plus restart/revocation denial tests.
+
+This feature has **no HTTP endpoint**, real resource permission system,
+human-presence attestation, encrypted database, public hosting or native
+Windows ACL protection. It requires POSIX `0700` private-directory checks
+(or a reviewed Linux/WSL development environment); Windows-native policy
+creation fails closed until ACL auditing is designed. The existing
+in-memory R5 reference remains the default.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
