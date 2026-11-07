@@ -300,6 +300,13 @@ class DurableOwnerConsentPolicy:
             ).fetchone()
             if row is not None:
                 raise PolicyDenied("operator key ID already enrolled or revoked")
+            # An old compromised public key must not be re-enrolled under
+            # a new kid to bypass its durable revocation tombstone.
+            same_public = conn.execute(
+                "SELECT 1 FROM operator_keys WHERE public_key=?", (public_key,)
+            ).fetchone()
+            if same_public is not None:
+                raise PolicyDenied("operator public key already enrolled under another ID")
             if conn.execute("SELECT count(*) FROM operator_keys").fetchone()[0] >= self._capacity:
                 raise PolicyDenied("operator key registry at capacity")
             conn.execute(
