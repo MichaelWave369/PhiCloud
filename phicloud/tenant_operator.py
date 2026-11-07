@@ -83,7 +83,14 @@ def execute(argv=None, *, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
         tenant, identity, confirmed = _read_request(stdin)
         if args.apply and not confirmed:
             raise LocalTenantConfigError("explicit_tenant_matched_revoke_confirmation_required")
-        store = LocalTenantStore(path)
+        if (os.environ.get("PHICLOUD_TENANT_FENCE_PATH") and
+                os.environ.get("PHICLOUD_ENABLE_FENCE_DEV") != "1"):
+            raise LocalTenantConfigError("explicit_recovery_fence_opt_in_required")
+        fence_path = (os.environ.get("PHICLOUD_TENANT_FENCE_PATH")
+                      if os.environ.get("PHICLOUD_ENABLE_FENCE_DEV") == "1" else None)
+        if os.environ.get("PHICLOUD_ENABLE_FENCE_DEV") == "1" and not fence_path:
+            raise LocalTenantConfigError("private_recovery_fence_path_required")
+        store = LocalTenantStore(path, fence_path=fence_path)
         try:
             if args.apply:
                 result = store.revoke_member_offline(tenant, identity)
