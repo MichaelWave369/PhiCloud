@@ -277,6 +277,119 @@ class DurableOwnerConsentPolicy:
             return True
         return self._transaction(approve_tx)
 
+    def register_operator_key(
+        self, *, operator_id: str, kid: str, public_key: bytes
+    ) -> None:
+        """Trusted provisioning of a public verifier key; no private key here.
+
+        Key IDs are immutable, including after revocation. Rotation means
+        enrolling a new kid and revoking the old kid through trusted code.
+        """
+        from .operator_approval import _IDENTIFIER, Ed25519PublicKey
+        if (
+            Ed25519PublicKey is None
+            or type(operator_id) is not str or not _IDENTIFIER.fullmatch(operator_id)
+            or type(kid) is not str or not _IDENTIFIER.fullmatch(kid)
+            or type(public_key) is not bytes or len(public_key) != 32
+        ):
+            raise PolicyDenied("invalid operator key enrollment")
+        def register_key(conn):
+            row = conn.execute(
+                "SELECT 1 FROM operator_keys WHERE operator_id=? AND kid=?",
+                (operator_id,kid),
+            ).fetchone()
+            if row is not None:
+                raise PolicyDenied("operator key ID already enrolled or revoked")
+            if conn.execute("SELECT count(*) FROM operator_keys").fetchone()[0] >= self._capacity:
+                raise PolicyDenied("operator key registry at capacity")
+            conn.execute(
+                "INSERT INTO operator_keys(operator_id,kid,public_key,revoked) VALUES(?,?,?,0)",
+                (operator_id,kid,public_key),
+            )
+        self._transaction(register_key)
+
+    def revoke_operator_key(self, *, operator_id: str, kid: str) -> None:
+        """Persist a public-key tombstone and atomically burn unspent approvals."""
+        from .operator_approval import _IDENTIFIER
+        if (
+            type(operator_id) is not str or not _IDENTIFIER.fullmatch(operator_id)
+            or type(kid) is not str or not _IDENTIFIER.fullmatch(kid)
+        ):
+            raise PolicyDenied("invalid operator key revocation target")
+        def revoke_key(conn):
+            changed = conn.execute(
+                "UPDATE operator_keys SET revoked=1 WHERE operator_id=? AND kid=?",
+                (operator_id,kid),
+            )
+            if changed.rowcount != 1:
+                raise PolicyDenied("operator key not enrolled")
+            conn.execute("""
+                UPDATE requests SET state='spent', approval_until_ms=NULL
+                WHERE signer_id=? AND signer_kid=? AND state='approved'
+            """, (operator_id,kid))
+        self._transaction(revoke_key)
+
+    def approve_signed(self, receipt: object, *, now: datetime) -> bool:
+        """Verify exact Ed25519 receipt against trusted operator public key.
+
+        A malformed or refused review burns the staged ticket. The signature
+        is verified again at consumption. No client-supplied keys are trusted.
+        """
+        instant = _utc(now)
+        if type(receipt) is not dict:
+            return False
+        operator_id, kid, review_id = (
+            receipt.get("operator_id"), receipt.get("kid"), receipt.get("review_id")
+        )
+        if any(type(v) is not str for v in (operator_id,kid,review_id)):
+            return False
+        def check_and_approve(conn):
+            row = conn.execute("""
+                SELECT r.issuer,r.subject,r.request_json,r.review_until_ms,
+                       o.revoked,k.public_key,k.revoked
+                FROM requests r JOIN owners o
+                  ON r.issuer=o.issuer AND r.subject=o.subject
+                LEFT JOIN operator_keys k
+                  ON k.operator_id=? AND k.kid=?
+                WHERE r.review_id=? AND r.state='pending'
+            """, (operator_id,kid,review_id)).fetchone()
+            if row is None:
+                return False
+            conn.execute(
+                "UPDATE requests SET state='spent' WHERE review_id=?",
+                (review_id,),
+            )
+            issuer,subject,saved,until,owner_revoked,key,signer_revoked = row
+            if owner_revoked or signer_revoked != 0 or key is None:
+                return False
+            try:
+                request = EffectRequest(**json.loads(saved))
+                ticket = ReviewTicket(
+                    review_id=review_id,
+                    request=request,
+                    expires_at=datetime.fromtimestamp(until / 1000,timezone.utc),
+                )
+                expiry = verified_receipt_expiry(
+                    receipt,ticket=ticket,public_key=bytes(key),now=instant,
+                )
+            except (PolicyDenied,ValueError,TypeError,OverflowError,KeyError):
+                return False
+            if not self._allow(request) or request.subject_issuer != issuer or request.subject_id != subject:
+                return False
+            deadline = min(until,expiry)
+            conn.execute("""
+                UPDATE requests
+                SET state='approved',approval_until_ms=?,
+                    signer_id=?,signer_kid=?,signed_receipt=?
+                WHERE review_id=?
+            """, (
+                deadline,operator_id,kid,
+                json.dumps(receipt,sort_keys=True,separators=(",",":"),ensure_ascii=True),
+                review_id,
+            ))
+            return True
+        return self._transaction(check_and_approve)
+
     def revoke_owner(self, *, issuer: str, sub: str) -> None:
         """Persist a tombstone. Fresh sign-in cannot silently reenable owner."""
         if type(issuer) is not str or type(sub) is not str or not issuer or not sub:
