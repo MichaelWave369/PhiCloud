@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -16,12 +17,14 @@ from .authz import (
     DEMO_READ_SCOPE, DEMO_WRITE_SCOPE,
 )
 from .owner_demo import DemoStoreFull, OwnerDemoStore, SCHEMA as OWNER_SCHEMA
+from .tenant_store import (LocalTenantError, LocalTenantCapacity, LocalTenantConfigError,
+                           create_tenant_store, TENANT_SCHEMA)
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parent.parent / "config" / "services.json"
 LOOPBACK = "127.0.0.1"
 
 
-def make_handler(manifest: dict, authorizer=None, owner_store=None):
+def make_handler(manifest: dict, authorizer=None, owner_store=None, tenant_store=None):
     """Factory returns a request handler with a validated, immutable startup snapshot."""
     snapshot = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -48,6 +51,8 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None):
                 self._reply(200, snapshot)
             elif requested.path == "/v1/private/profile" and authorizer is not None:
                 self._private_profile()
+            elif tenant_store is not None and requested.path.startswith("/v1/private/tenants/"):
+                self._tenant_read(requested.path)
             elif (owner_store is not None and
                   (requested.path == "/v1/private/demo-records" or
                    requested.path.startswith("/v1/private/demo-records/"))):
@@ -57,6 +62,12 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None):
 
         def do_POST(self) -> None:  # noqa: N802
             requested = urlsplit(self.path)
+            if tenant_store is not None and requested.path.startswith("/v1/private/tenants/"):
+                if requested.query or requested.fragment:
+                    self._reply(404, b'{"error":"not_found"}')
+                else:
+                    self._tenant_mutation("create", requested.path)
+                return
             if (owner_store is None or requested.query or requested.fragment or
                 requested.path != "/v1/private/demo-records"):
                 self._reply(404, b'{"error":"not_found"}')
@@ -65,6 +76,12 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None):
 
         def do_DELETE(self) -> None:  # noqa: N802
             requested = urlsplit(self.path)
+            if tenant_store is not None and requested.path.startswith("/v1/private/tenants/"):
+                if requested.query or requested.fragment:
+                    self._reply(404, b'{"error":"not_found"}')
+                else:
+                    self._tenant_mutation("delete", requested.path)
+                return
             prefix = "/v1/private/demo-records/"
             if (owner_store is None or requested.query or requested.fragment or
                 not requested.path.startswith(prefix)):
@@ -162,6 +179,98 @@ def make_handler(manifest: dict, authorizer=None, owner_store=None):
             except Exception:
                 self._reply(503, b'{"error":"local_demo_unavailable"}')
 
+        def _parse_tenant_resource(self, path: str):
+            # Only fixed metadata endpoints; never accept path traversal,
+            # arbitrary file paths, client-specified owner, or query payloads.
+            match = re.fullmatch(
+                r"/v1/private/tenants/([a-z][a-z0-9-]{2,31})/"
+                r"(records|audit)(?:/([A-Za-z0-9_-]{24,64}))?", path
+            )
+            if not match:
+                return None
+            tenant_id, category, record_id = match.groups()
+            if category == "audit" and record_id is not None:
+                return None
+            return tenant_id, category, record_id
+
+        def _tenant_read(self, path: str) -> None:
+            parsed = self._parse_tenant_resource(path)
+            if parsed is None:
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            if not self._require_local():
+                return
+            principal = self._authorize_demo("phicloud.tenant.read")
+            if principal is None:
+                return
+            tenant_id, category, record_id = parsed
+            try:
+                if category == "audit":
+                    events = tenant_store.own_audit(principal, tenant_id)
+                    reply = {"schema": TENANT_SCHEMA, "tenant": tenant_id,
+                             "actor_isolated": True, "events": events}
+                    self._reply(200, json.dumps(reply, separators=(",", ":")).encode())
+                elif record_id is None:
+                    records = tenant_store.list_own(principal, tenant_id)
+                    reply = {"schema": TENANT_SCHEMA, "tenant": tenant_id,
+                             "persistent_local_only": True, "records": records}
+                    self._reply(200, json.dumps(reply, separators=(",", ":")).encode())
+                else:
+                    record = tenant_store.read_own(principal, tenant_id, record_id)
+                    if record is None:
+                        self._reply(404, b'{"error":"not_found"}')
+                    else:
+                        self._reply(200, json.dumps(record, separators=(",", ":")).encode())
+            except LocalTenantError:
+                self._reply(404, b'{"error":"not_found"}')
+            except Exception:
+                self._reply(503, b'{"error":"local_tenant_unavailable"}')
+
+        def _tenant_mutation(self, action: str, path: str) -> None:
+            parsed = self._parse_tenant_resource(path)
+            if parsed is None:
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            tenant_id, category, record_id = parsed
+            if (category != "records" or
+                (action == "create" and record_id is not None) or
+                (action == "delete" and record_id is None)):
+                self._reply(404, b'{"error":"not_found"}')
+                return
+            if not self._require_local():
+                return
+            expected_action = ("create-tenant-test-record" if action == "create"
+                               else "delete-tenant-test-record")
+            origin = self.headers.get_all("Origin", [])
+            expected_origin = f"http://{LOOPBACK}:{self.server.server_port}"
+            if (len(origin) > 1 or (origin and origin != [expected_origin]) or
+                self.headers.get_all("X-PhiCloud-Action", []) != [expected_action]):
+                self._reply(403, b'{"error":"explicit_local_action_required"}')
+                return
+            length = self.headers.get_all("Content-Length", [])
+            if (self.headers.get_all("Transfer-Encoding") or
+                len(length) > 1 or (length and length != ["0"]) or
+                self.headers.get_all("Content-Type")):
+                self._reply(413, b'{"error":"body_not_accepted"}')
+                self.close_connection = True
+                return
+            principal = self._authorize_demo("phicloud.tenant.write")
+            if principal is None:
+                return
+            try:
+                if action == "create":
+                    record = tenant_store.create(principal, tenant_id)
+                    self._reply(201, json.dumps(record, separators=(",", ":")).encode())
+                else:
+                    tenant_store.delete_own(principal, tenant_id, record_id)
+                    self._reply(200, b'{"deleted":true,"durable_audit_retained":true}')
+            except LocalTenantError:
+                self._reply(404, b'{"error":"not_found"}')
+            except LocalTenantCapacity:
+                self._reply(429, b'{"error":"local_tenant_capacity"}')
+            except Exception:
+                self._reply(503, b'{"error":"local_tenant_unavailable"}')
+
         def _private_profile(self) -> None:
             """One read-only resource: actual server-side introspection each time.
 
@@ -224,16 +333,29 @@ def main(argv: list[str] | None = None) -> int:
     if demo_requested and authorizer is None:
         parser.error("owner_demo_requires_explicit_oauth_gate")
     owner_store = OwnerDemoStore() if demo_requested else None
-    with ThreadingHTTPServer((LOOPBACK, args.port),
-                             make_handler(manifest, authorizer, owner_store)) as server:
+    try:
+        tenant_store = create_tenant_store()
+    except (LocalTenantConfigError, ValueError) as exc:
+        parser.error(str(exc))
+    try:
+        server = ThreadingHTTPServer((LOOPBACK, args.port),
+                make_handler(manifest, authorizer, owner_store, tenant_store))
+    except Exception:
+        if tenant_store:
+            tenant_store.close()
+        raise
+    with server:
         print(f"PhiCloud R0: http://{LOOPBACK}:{args.port}/v1/services (declarative only)")
         print("Local R3 OAuth test route enabled" if authorizer else "R3 OAuth test route disabled")
         print("R4 ephemeral owner isolation demo enabled" if owner_store else "R4 owner demo disabled")
+        print("R6 private synthetic tenant store enabled" if tenant_store else "R6 tenant store disabled")
         print("No hosted accounts, mail delivery, remote service discovery or cloud storage.")
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+    if tenant_store:
+        tenant_store.close()
     return 0
 
 

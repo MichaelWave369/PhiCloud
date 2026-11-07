@@ -72,3 +72,13 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [x] Extend real Keycloak CI to use two distinct signed-in users and independent logout checks
 - [ ] Confirm latest-commit Python/ANC/PhiShield and real Keycloak workflow are green
 - [ ] Design actual tenant-aware durable resource persistence and owner/operation authorization before files or mailbox data
+
+## R6: Private durable synthetic tenant ownership (separate from R5 consent)
+
+- [x] Add opt-in local SQLite fixture with operator-only one-time tenant membership and pseudonymous Keycloak subject indices
+- [x] Guard exact tenant read/write OAuth scopes, private record ownership, explicit mutation actions and absence of arbitrary payloads
+- [x] Make record creation/deletion and bounded local actor audit atomic; preserve state across restarts
+- [x] Add Python privacy, ownership, restart, TTL, capacity, revocation and path-safety tests
+- [x] Add distinct real Keycloak workflow with two independent test users, server restarts and deletion/audit verification
+- [ ] Verify all independent R6, existing R3, PhiShield and ANC CI checks pass after PR review
+- [ ] Design encrypted tenant-aware database, account recovery, operator membership lifecycle and backed-up audit **before any real user file storage**
