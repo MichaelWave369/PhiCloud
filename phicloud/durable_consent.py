@@ -111,7 +111,9 @@ class DurableOwnerConsentPolicy:
                     return result
                 finally:
                     conn.close()
-            except (sqlite3.Error, OSError) as exc:
+            except (sqlite3.Error, OSError, ValueError) as exc:
+                # Permission or file-type drift must deny, not raise through
+                # the identity-to-PhiShield reference policy as an internal error.
                 raise PolicyDenied("local policy storage unavailable") from exc
 
     def _initialize(self) -> None:
