@@ -60,6 +60,8 @@ class DurableOwnerConsentPolicy:
     def __init__(self, db_path: str | Path, *, capacity: int = 1024) -> None:
         if type(capacity) is not int or not 1 <= capacity <= 100_000:
             raise ValueError("invalid ledger capacity")
+        if os.name != "posix":
+            raise ValueError("POSIX private-directory checks required; Windows ACL review pending")
         path = Path(db_path)
         if not path.is_absolute() or path.suffix not in {".sqlite3", ".db"}:
             raise ValueError("absolute SQLite .db or .sqlite3 path required")
@@ -254,6 +256,13 @@ class DurableOwnerConsentPolicy:
         if type(issuer) is not str or type(sub) is not str or not issuer or not sub:
             raise PolicyDenied("invalid revocation target")
         def revoke_tx(conn):
+            existing = conn.execute(
+                "SELECT 1 FROM owners WHERE issuer=? AND subject=?", (issuer,sub)
+            ).fetchone()
+            if existing is None and conn.execute(
+                "SELECT count(*) FROM owners"
+            ).fetchone()[0] >= self._capacity:
+                raise PolicyDenied("revocation tombstone capacity exceeded")
             conn.execute("""
                 INSERT INTO owners(issuer,subject,revoked)
                 VALUES(?,?,1)
