@@ -6,7 +6,7 @@
  * Start the Keycloak test realm using that fixture's Compose profile.
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -167,6 +167,26 @@ async function resourceRequest(token, path='/v1/private/profile') {
   });
 }
 
+function checkInternalShield(token, secret, expected, consentFixture = true) {
+  // Deliberately no bearer token in argv, URL, printed logs or source files.
+  const result = spawnSync('python', ['tests/shield_identity_e2e.py'], {
+    env: {
+      ...process.env,
+      PHICLOUD_OAUTH_CLIENT_SECRET: secret,
+      PHICLOUD_SHIELD_CONSENT_FIXTURE: consentFixture ? '1' : '0',
+      PHICLOUD_REAL_E2E: '1',
+      NODE_ENV: 'test',
+      PYTHONPATH: '.',
+    },
+    input: token,
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(result.status, 0, 'local PhiShield integration subprocess failed');
+  assert.equal(result.stdout.trim(), expected,
+    'local PhiShield must derive identity from Keycloak and honor independent consent');
+}
+
 async function exercise(admin, user, secret) {
   await withPythonServer(secret, async()=>{
     const start=await resourceRequest(null);
@@ -187,16 +207,22 @@ async function exercise(admin, user, secret) {
     assert.equal(profile.phios_effect_authority,false);
     assert.ok(!JSON.stringify(profile).includes(user.username));
 
+    console.log('R4: verified Keycloak subject to local PhiShield reference gate');
+    checkInternalShield(valid, secret, 'CANDIDATE', true);
+    checkInternalShield(valid, secret, 'DENY', false);
+
     console.log('R3: wrong scope, wrong audience and ID-only flows denied');
     const noScope=await exchangeUserToken('phiid-bff-dev',
       'http://127.0.0.1:8786/auth/callback','openid profile',user);
     assert.equal((await resourceRequest(noScope)).status,401,
       'token without registered audience/scope was accepted');
+    checkInternalShield(noScope, secret, 'DENY', true);
 
     const mailToken=await exchangeUserToken('phimail-bff-dev',
       'http://127.0.0.1:5173/auth/phiid/callback','openid profile',user);
     assert.equal((await resourceRequest(mailToken)).status,401,
       'PhiMail token accidentally authorized PhiCloud demo');
+    checkInternalShield(mailToken, secret, 'DENY', true);
     assert.equal((await resourceRequest('not-a-real-token-with-any-permissions')).status,401);
 
     console.log('R3: revoke upstream user session and require fresh introspection');
@@ -205,7 +231,9 @@ async function exercise(admin, user, secret) {
     // Keycloak token introspection must reflect session invalidation. No cache.
     const after=await resourceRequest(valid);
     assert.equal(after.status,401,'revoked real user token was accepted after Keycloak logout');
+    checkInternalShield(valid, secret, 'DENY', true);
     console.log('PASS: genuine Keycloak token allowed only intended PhiCloud read scope, revoked session denied');
+    console.log('PASS: R4 PhiShield internal integration requires real active subject, exact scope and independent consent fixture');
     console.log('BOUNDARY: no cloud data, file I/O, Gmail or PhiOS operations performed');
   });
 }
