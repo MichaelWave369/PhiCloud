@@ -221,6 +221,26 @@ or real-world proof of human intent. R7's short signature TTL
 makes timely review a known limitation. The existing PhiOS
 offline and PhiShield execution boundaries remain unchanged.
 
+## R12: inspect for five minutes, sign only when approved (local prototype)
+
+The [R12 deferred-signing preview](docs/R12_DEFERRED_SIGNED_REVIEW.md)
+lets a freshly PhiID-verified synthetic request remain **unsigned**
+during a private five-minute operator preview. Only after explicit
+review does an **independent operator-controlled Unix signer** receive
+the exact canonical R7 request and return a newly issued signature
+that is still valid for **at most 30 seconds**. The server independently
+checks that signature against the pinned key, then requires R9 passkey
+user verification before recording any approval.
+
+This solves R11's tight pre-signed-browser window without making
+long-lived approval tokens. PhiCloud supplies **only a signer client**,
+not a signer daemon or private-key vault. The local signer must
+independently authenticate operator intent; access to a Unix
+socket alone is not human consent or process isolation. No browser
+signing key, real files, public API or PhiOS execution authority.
+Existing 60-second R6 staging and the 30-second R7 receipt cap
+are unchanged for their older flows.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
