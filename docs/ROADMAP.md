@@ -103,3 +103,14 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [x] Extend real two-user Keycloak CI to restore older SQLite only and prove a still-active token cannot regain membership after reconciliation
 - [ ] Verify latest-head Python/ANC and both real Keycloak workflows pass, then review and merge
 - [ ] External tamper-resistant revocation authority, tenant lifecycle and encrypted real resource storage remain separate future security gates
+
+## R10: Separately scoped AES-GCM synthetic marker storage
+
+- [x] Add default-off AES-256-GCM fixed synthetic marker encryption using the already-pinned cryptography library
+- [x] Provision raw test encryption key offline in private directory separately from SQLite, bound by key fingerprint; reject missing/wrong keys
+- [x] Authenticate tenant, owner, record ID and timestamp as AES-GCM associated data; prevent tamper, metadata swaps and foreign reads
+- [x] Add independent exact sealed read/write OAuth scopes, no browser plaintext or supplied payloads
+- [x] Purge a revoked tenant member's sealed test rows within R8/R9 membership removal transaction
+- [x] Add unit/HTTP tests and extend real two-user Keycloak CI to cover restart with independent key
+- [ ] Confirm full Python matrix, ANC/PhiShield and two actual Keycloak workflow checks are green
+- [ ] Design actual data-key envelope encryption, independent recovery/rotation, export and trustworthy backup policy before real files
