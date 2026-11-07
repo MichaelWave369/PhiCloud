@@ -151,7 +151,7 @@ class RotationWitnessTests(unittest.TestCase):
             EnvelopeDemoStore(self.db,self.old,
                               rotation_witness_path=self.witness)
         with self.assertRaisesRegex(LocalTenantConfigError,
-                                    "rotation_witness_ahead_recovery_required"):
+                                    "stale_or_pending_envelope_key_rotation"):
             rotate_wrapping_key(self.db,self.old,self.third,
                                 rotation_witness_path=self.witness)
         self.db._db.execute("DROP TRIGGER fail_envelope_rotate")
