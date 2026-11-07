@@ -416,7 +416,8 @@ class DurableOwnerConsentPolicy:
         return self._transaction(check_and_approve)
 
     def register_operator_credential(
-        self, *, operator_id: str, credential_id: bytes, public_key: bytes
+        self, *, operator_id: str, credential_id: bytes, public_key: bytes,
+        sign_count: int = 0
     ) -> None:
         """Trusted, out-of-band VERIFIED WebAuthn registration result only.
 
@@ -430,6 +431,7 @@ class DurableOwnerConsentPolicy:
             type(operator_id) is not str or not _IDENTIFIER.fullmatch(operator_id)
             or type(credential_id) is not bytes or not 16 <= len(credential_id) <= 128
             or type(public_key) is not bytes or not 32 <= len(public_key) <= 4096
+            or type(sign_count) is not int or not 0 <= sign_count < 2**32
         ):
             raise PolicyDenied("invalid trusted WebAuthn enrollment")
         def register(conn):
@@ -452,8 +454,8 @@ class DurableOwnerConsentPolicy:
                 INSERT INTO operator_credentials(
                     operator_id,credential_id,public_key,sign_count,
                     revoked,rp_id,origin
-                ) VALUES(?,?,?,0,0,?,?)
-            """, (operator_id,credential_id,public_key,RP_ID,ORIGIN))
+                ) VALUES(?,?,?,?,0,?,?)
+            """, (operator_id,credential_id,public_key,sign_count,RP_ID,ORIGIN))
         self._transaction(register)
 
     def revoke_operator_credential(self, *, credential_id: bytes) -> None:
