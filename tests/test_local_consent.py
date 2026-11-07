@@ -193,10 +193,21 @@ class OwnerConsentTests(unittest.TestCase):
             replace(ticket.request, action="file.write"),
             replace(ticket.request, resource="mail:inbox"),
             replace(ticket.request, audience="phimail-bff-dev"),
-            replace(ticket.request, subject_id="other-person"),
         ):
             with self.subTest(request=changed), self.assertRaises(PolicyDenied):
                 self.policy.register_synthetic_self(changed)
+        # A trusted service may register another synthetic self-owner;
+        # it must NOT be able to consume a different owner's review.
+        other_owner = replace(ticket.request, subject_id="other-person")
+        with self.assertRaises(PolicyDenied):
+            self.policy.consume(other_owner, now=self.now)
+        self.assertTrue(self.approve(ticket))
+        with self.assertRaises(PolicyDenied):
+            self.policy.consume(other_owner, now=self.now)
+        self.assertEqual(
+            self.decide(ticket.request.request_id, self.sign(ticket.request)).disposition,
+            "CANDIDATE",
+        )
 
     def test_expiry_denies_pending_and_approved(self):
         pending = self.stage("pending-expiry")
