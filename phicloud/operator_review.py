@@ -267,13 +267,27 @@ class LocalOperatorApproval:
         }
 
 
-def handler_factory(ceremony: LocalOperatorApproval):
+def handler_factory(ceremony: LocalOperatorApproval, *, mode: str="signed"):
+    """R11 signed receipt or R12 deferred signature, same protected routes.
+
+    Serving a different static bundle does NOT expand authorization or
+    change Host/Origin checks. Both controllers share a strict interface.
+    """
     root=Path(__file__).resolve().parent/"static"
-    files={
-        "/":("operator_approve.html","text/html"),
-        "/operator_approve.js":("operator_approve.js","application/javascript"),
-        "/operator_approve.css":("operator_approve.css","text/css"),
-    }
+    if mode=="signed":
+        files={
+            "/":("operator_approve.html","text/html"),
+            "/operator_approve.js":("operator_approve.js","application/javascript"),
+            "/operator_approve.css":("operator_approve.css","text/css"),
+        }
+    elif mode=="deferred":
+        files={
+            "/":("operator_deferred.html","text/html"),
+            "/operator_approve.js":("operator_deferred.js","application/javascript"),
+            "/operator_approve.css":("operator_approve.css","text/css"),
+        }
+    else:
+        raise ValueError("unsupported local operator review UI mode")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:

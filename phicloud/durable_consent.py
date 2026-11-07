@@ -217,10 +217,28 @@ class DurableOwnerConsentPolicy:
         self._transaction(register)
 
     def stage(self, request: EffectRequest, *, now: datetime) -> ReviewTicket:
+        """Existing R6 one-minute review; unchanged for legacy callers."""
+        return self._stage_bounded(request, now=now, seconds=MAX_REVIEW_SECONDS)
+
+    def stage_operator_preview(
+        self, request: EffectRequest, *, now: datetime
+    ) -> ReviewTicket:
+        """R12 trusted-only preview, up to five minutes before late signing.
+
+        This does not extend R7 signature validity, an approved receipt,
+        credential validity, or actual permission. Never expose as HTTP.
+        """
+        return self._stage_bounded(request, now=now, seconds=300)
+
+    def _stage_bounded(
+        self, request: EffectRequest, *, now: datetime, seconds: int
+    ) -> ReviewTicket:
+        if type(seconds) is not int or seconds not in (MAX_REVIEW_SECONDS, 300):
+            raise PolicyDenied("unsupported local review lifetime")
         instant = _utc(now)
         if not self._allow(request):
             raise PolicyDenied("unsupported action")
-        expires = instant + timedelta(seconds=MAX_REVIEW_SECONDS)
+        expires = instant + timedelta(seconds=seconds)
         review = ReviewTicket(
             review_id=secrets.token_urlsafe(24),
             request=request,

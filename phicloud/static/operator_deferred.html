@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>PhiCloud · Preview before independent signing</title>
+<link rel="stylesheet" href="/operator_approve.css">
+<script defer src="/operator_approve.js"></script>
+</head>
+<body>
+<main>
+<h1>PhiCloud · Preview, Sign, Verify</h1>
+<p class="warning">Development-only local approval. You are not authorizing a PhiOS effect, file read, mailbox, payment, or other real resource.</p>
+<section id="unlock-section">
+<h2>1. Unlock this operator review</h2>
+<p>Use the one-time code shown in the trusted local terminal. No action details are transmitted until pairing succeeds.</p>
+<label for="pairing">One-use operator pairing code</label>
+<input id="pairing" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="128">
+<button type="button" id="unlock">Show signed request</button>
+</section>
+<section id="review-section" hidden>
+<h2>2. Inspect every signed field</h2>
+<p>The details below are from an independently staged request. They are not signed yet. A separately controlled local signer will sign these exact fields only after your explicit confirmation.</p>
+<dl id="request-fields"></dl>
+<p class="warning">Only <strong>profile.read</strong> for <strong>profile:synthetic-self</strong> is supported. An authenticator prompt proves a credential was user-verified, not that a particular person read these details.</p>
+<label for="ack"><input id="ack" type="checkbox"> I have checked each displayed field. Request a fresh independent signature for this exact synthetic-profile review, then verify with my registered passkey.</label>
+<div class="controls">
+<button id="approve" type="button" disabled>Sign now, verify passkey and record review</button>
+<button id="decline" type="button">Decline and close review</button>
+</div>
+</section>
+<p id="status" role="status" aria-live="polite">No approval has been recorded.</p>
+<p class="warning">Even a successful signed + WebAuthn review is non-executable. PhiID token introspection, ANC/PhiShield evaluation, and independent PhiOS device-side approval remain separate.</p>
+</main>
+</body>
+</html>
