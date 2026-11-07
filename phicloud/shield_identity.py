@@ -25,6 +25,7 @@ from .authz import (
     LocalTokenIntrospector,
 )
 from .shield_policy import ConsentEvidence, EffectRequest, PolicyVerdict, _utc, _valid_request
+from .local_consent import LocalOwnerConsentPolicy, PolicyDenied, ReviewTicket
 from .shield_transport import (
     LocalReplayCache,
     evaluate_authenticated_candidate,
@@ -127,4 +128,65 @@ def evaluate_verified_profile_candidate(
         authority=authority,
         consent=consent,
         now=instant,
+    )
+
+
+def stage_verified_profile_review(
+    token: str,
+    *,
+    request_id: str,
+    introspector: LocalTokenIntrospector,
+    policy: LocalOwnerConsentPolicy,
+    now: datetime | None = None,
+) -> ReviewTicket:
+    """Begin a human-reviewable request from freshly verified identity.
+
+    This does NOT approve the request. Only a trusted local review step may
+    call policy.approve(), ideally through operator_console_review().
+    """
+    if type(policy) is not LocalOwnerConsentPolicy:
+        raise PolicyDenied("trusted local policy required")
+    request = verified_profile_request(
+        token, introspector=introspector, request_id=request_id
+    )
+    policy.register_synthetic_self(request)
+    return policy.stage(
+        request, now=_utc(now if now is not None else datetime.now(timezone.utc))
+    )
+
+
+def evaluate_reviewed_profile_candidate(
+    token: str,
+    *,
+    request_id: str,
+    introspector: LocalTokenIntrospector,
+    policy: LocalOwnerConsentPolicy,
+    envelope: object,
+    trusted_keys: Mapping[tuple[str, str], bytes],
+    replay_cache: LocalReplayCache,
+    now: datetime | None = None,
+) -> PolicyVerdict:
+    """R5: actual ledger lookup/atomic consumption, no caller consent callback.
+
+    Non-authoritative CANDIDATE is the most positive possible result.
+    Existing R4 consent fixture helper is preserved for compatibility but
+    R5 never accepts a boolean or fabricated client ConsentEvidence.
+    """
+    instant = _utc(now if now is not None else datetime.now(timezone.utc))
+    if type(policy) is not LocalOwnerConsentPolicy:
+        return PolicyVerdict("DENY", "trusted owner-consent policy required")
+    try:
+        request = verified_profile_request(
+            token, introspector=introspector, request_id=request_id
+        )
+    except (AuthorizationUnavailable, AuthorizationDenied, TypeError, ValueError):
+        return PolicyVerdict("DENY", "verified and active PhiID token required")
+    try:
+        authority, consent = policy.consume(request, now=instant)
+    except PolicyDenied:
+        return PolicyVerdict("DENY", "owner-bound, unexpired local review required")
+    return evaluate_authenticated_candidate(
+        request, envelope=envelope, producer_id=PRODUCER,
+        trusted_keys=trusted_keys, replay_cache=replay_cache,
+        authority=authority, consent=consent, now=instant,
     )

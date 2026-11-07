@@ -246,6 +246,27 @@ async function exerciseOwnerIsolation(alice, bob, profileOnlyToken) {
   return {aliceToken,bobToken,aliceId:a.id,bobId:b.id};
 }
 
+function checkR5OwnerReview(token, secret, expected, mode = 'approve') {
+  // A REAL Keycloak token, but the terminal review is a synthetic CI input.
+  // No bearer token or client secret in argv or diagnostic messages.
+  const result = spawnSync('python', ['tests/owner_consent_e2e.py'], {
+    env: {
+      ...process.env,
+      PHICLOUD_OAUTH_CLIENT_SECRET: secret,
+      PHICLOUD_R5_REVIEW_FIXTURE: mode,
+      PHICLOUD_REAL_E2E: '1',
+      NODE_ENV: 'test',
+      PYTHONPATH: '.',
+    },
+    input: token,
+    encoding: 'utf8',
+    timeout: 10000,
+  });
+  assert.equal(result.status, 0, 'R5 in-process owner review check unavailable');
+  assert.equal(result.stdout.trim(), expected,
+    'R5 must enforce verified identity, owner binding and one-use review');
+}
+
 async function exercise(admin, user, bob, secret) {
   await withPythonServer(secret, async()=>{
     const start=await resourceRequest(null);
@@ -270,18 +291,24 @@ async function exercise(admin, user, bob, secret) {
     checkInternalShield(valid, secret, 'CANDIDATE', true);
     checkInternalShield(valid, secret, 'DENY', false);
 
+    console.log('R5: verified Keycloak identity with simulated one-use owner review');
+    checkR5OwnerReview(valid, secret, 'DENY', 'deny');
+    checkR5OwnerReview(valid, secret, 'CANDIDATE', 'approve');
+
     console.log('R3: wrong scope, wrong audience and ID-only flows denied');
     const noScope=await exchangeUserToken('phiid-bff-dev',
       'http://127.0.0.1:8786/auth/callback','openid profile',user);
     assert.equal((await resourceRequest(noScope)).status,401,
       'token without registered audience/scope was accepted');
     checkInternalShield(noScope, secret, 'DENY', true);
+    checkR5OwnerReview(noScope, secret, 'DENY', 'approve');
 
     const mailToken=await exchangeUserToken('phimail-bff-dev',
       'http://127.0.0.1:5173/auth/phiid/callback','openid profile',user);
     assert.equal((await resourceRequest(mailToken)).status,401,
       'PhiMail token accidentally authorized PhiCloud demo');
     checkInternalShield(mailToken, secret, 'DENY', true);
+    checkR5OwnerReview(mailToken, secret, 'DENY', 'approve');
     assert.equal((await resourceRequest('not-a-real-token-with-any-permissions')).status,401);
 
     const owners=await exerciseOwnerIsolation(user,bob,valid);
@@ -293,6 +320,7 @@ async function exercise(admin, user, bob, secret) {
     const after=await resourceRequest(valid);
     assert.equal(after.status,401,'revoked real user token was accepted after Keycloak logout');
     checkInternalShield(valid, secret, 'DENY', true);
+    checkR5OwnerReview(valid, secret, 'DENY', 'approve');
     assert.equal((await resourceRequest(owners.aliceToken,
       '/v1/private/demo-records/'+owners.aliceId)).status,401,
       'Alice revoked token remained valid for owner record');
@@ -307,6 +335,7 @@ async function exercise(admin, user, bob, secret) {
     console.log('PASS: real two-subject scope/owner separation, denied cross-owner read/write and independent revocation');
     console.log('PASS: genuine Keycloak token allowed only intended PhiCloud read scope, revoked session denied');
     console.log('PASS: R4 PhiShield internal integration requires real active subject, exact scope and independent consent fixture');
+    console.log('PASS: R5 one-use owner review requires active Keycloak identity and exact simulated approval');
     console.log('BOUNDARY: no cloud data, file I/O, Gmail or PhiOS operations performed');
   });
 }

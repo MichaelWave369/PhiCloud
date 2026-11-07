@@ -74,6 +74,24 @@ human consent or a deployed ANC security service.
 This adds **no** public policy API, general resource authority, mail/file
 access, or device control. Login never grants PhiOS effects.
 
+## R5: one-use local resource-owner review (prototype)
+
+The [R5 in-process owner and consent state machine](docs/R5_LOCAL_OWNER_CONSENT.md)
+now attaches the **synthetic self-profile** to the issuer/subject pair obtained
+through fresh Keycloak access-token introspection. It stages an exact-action
+review, supports a local terminal acknowledgment, consumes approval **once**,
+and cancels pending approvals when the synthetic owner is revoked.
+
+Its scope is deliberately fixed to `profile.read` on
+`profile:synthetic-self`; no actual data storage, file/mail access or OS
+effect is involved. The CI integration uses a genuine disposable Keycloak
+session but **simulates** the terminal approval; it is not proof of a live
+human's consent. A result is still only `DENY`, `REVIEW`, or non-authoritative
+`CANDIDATE`.
+
+The local ledger is not durable and has no remote API. It must not be
+presented as production resource ownership or consent verification.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
