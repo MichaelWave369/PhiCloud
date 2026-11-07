@@ -1,1 +1,23 @@
-/* R11 operator review intentionally reuses the R10 local stylesheet. */
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#0c1119;color:#e8edf8}
+body{margin:0;padding:2rem 1rem}
+main{max-width:680px;margin:1rem auto;padding:2rem;border:1px solid #39465a;border-radius:1rem;background:#171f2c}
+h1{margin-top:0;color:#c7dbff}
+.warning{color:#ffd5a3}
+li{margin:.7rem 0}
+label{display:block;margin-top:1rem}
+input,button{font:inherit;padding:.8rem 1rem;border-radius:.5rem;border:1px solid #6d809c}
+input{display:block;box-sizing:border-box;width:100%;background:#0b111a;color:#fff;margin:.5rem 0}
+button{background:#2a5778;color:white;cursor:pointer;margin:.7rem 0}
+button:disabled{opacity:.5;cursor:not-allowed}
+#ceremony{border-top:1px solid #39465a;margin-top:1rem}
+#status{font-weight:600;min-height:2rem}
+
+h2{font-size:1.12rem;color:#d2e4ff}
+dl{display:grid;grid-template-columns:minmax(140px,38%) minmax(0,1fr);gap:.7rem;
+padding:1rem;border:1px solid #435776;border-radius:.5rem;background:#0d1624}
+dt{font-weight:650;color:#acc6df}
+dd{margin:0;overflow-wrap:anywhere}
+#ack{display:inline-block;width:auto;margin-right:.5rem}
+.controls{display:flex;gap:1rem;flex-wrap:wrap}
+#decline{background:#533d44}
+@media(max-width:520px){dl{grid-template-columns:1fr;gap:.25rem}dd{margin-bottom:.6rem}}
