@@ -1,4 +1,4 @@
-# PhiShield R1: authenticated **local** ANC advisory envelope
+# PhiShield R1: authenticated **local** ANC advisory envelope (wire v2)
 
 **Status:** Opt-in in-process reference implementation using Python's standard
 `hmac` and `hashlib` primitives, with bounded JSON, freshness and a
@@ -30,6 +30,28 @@ trusted local ANC integration
     -> no executable permission or side effect
 ```
 
+## Wire version and full action binding
+
+The experimental authenticated wrapper now uses
+`phicloud.anc.authenticated.v2`. A keyed, domain-separated
+`request_binding` MAC is calculated from the **complete trusted**
+`EffectRequest`: request ID, scope, PhiID issuer/subject pair, audience,
+action, and resource. The wrapper also authenticates the nonce, time bounds,
+producer identity and underlying ANC risk evidence.
+
+This prevents a signed clean-risk advisory for one subject or resource from
+being substituted into another request even if a client accidentally reuses
+the same request ID. The raw issuer, subject and resource are **not**
+serialized in the wrapper, although a digest is not a substitute for
+privacy controls. Version v1 authenticated wrappers from experimental
+branches are intentionally rejected rather than silently downgraded.
+
+PhiID R6 currently issues an **NBGPocketMesh-specific** action approval,
+not a general PhiCloud capability. Do not reinterpret it as a PhiShield
+permission. End-to-end PhiID authority integration still needs a separately
+reviewed, trusted issuer verifier, explicit resource policy, and PhiOS
+approval for local device effects.
+
 ## Invariants
 
 - Do not accept a `producer_id` from a remote client as a trusted identity.
@@ -41,7 +63,7 @@ trusted local ANC integration
 - A verified MAC never makes `authority_granted=true` valid, elevates
   coherence to a capability, grants consent, or authorizes an OS effect.
 - The signed canonical JSON binds producer, key ID, audience, request ID,
-  scope, 128-bit random nonce, issuance/expiry and the entire ANC advisory.
+  scope, 128-bit random nonce, complete keyed request binding, issuance/expiry\nand the entire ANC advisory.
   Extra/missing fields, invalid keys, expired envelopes and mismatched
   fields are denied.
 - The one-use nonce cache is guarded by a lock and has finite capacity.
