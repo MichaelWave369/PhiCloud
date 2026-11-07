@@ -32,3 +32,13 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Foreign IDs and nonexistent IDs return identical 404 responses; never reveal existence across users. Keep data ephemeral, bounded and free of personal information.
 - Require a guarded mutation action header, no request bodies, and exact loopback origin for browser-originated mutations. Test arbitrary owner injection, timeouts, concurrency, expiry, capacity, cross-user delete and logout isolation.
 - A passed R4 test is not production storage or tenant isolation. Any real owner database and internet deployment requires independent security review, HTTPS, durable policy enforcement, encryption and recovery guarantees.
+
+## R6 private durable tenant-owner **development** fixture
+
+- R6 is **not** user file storage or production multi-tenant authorization. Never attach actual files, credentials, email, mailboxes, PhiVault, PhiOS effects, or privileged processes to its synthetic records.
+- Only an operator-owned, exact-schema first-start fixture may provision tenant membership. Never derive membership from a client-supplied tenant name, token email, a UI claim, a PhiID consent receipt or a Pocket approval. Never expose tenant/member provisioning as an unauthenticated HTTP route.
+- Derive every actor only from fresh confidential-client Keycloak introspection; require exact `phicloud.tenant.read` or `phicloud.tenant.write` and `phicloud-resource-dev` audience, plus server-side tenant membership and exact record ownership. Foreign/missing records return an indistinguishable 404.
+- Require both R3 OAuth and R6 tenant-development opt-in flags. Enforce POSIX 0700 directory/0600 SQLite permissions and refuse symlinks or native Windows until tested ACL protections exist. Store only synthetic markers and pseudonymous owner keys; do not log tokens or operator fixture content.
+- Preserve atomic create/delete+audit semantics, owner-isolated bounded history, 30-day record expiry, 90-day audit expiry and capacity ceilings. Recheck upstream token validity on every resource request.
+- Keep R0 service inventory, R4 ephemeral owner demo, PhiShield consent flows and standalone/offline PhiOS independent. Use a distinct R6 Keycloak workflow rather than overwriting concurrent R5 consent tests.
+- Never claim the private SQLite audit is tamper-evident, encrypted, multi-process reliable, backed up, production-ready or appropriate for personal data.
