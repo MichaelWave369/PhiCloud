@@ -1,0 +1,3 @@
+# Optional R7 operator signature verifier; R0-R6 core stays stdlib only.
+# Pinned to a reviewed 2026 release. The private signing key is never stored here.
+cryptography==50.0.2
