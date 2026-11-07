@@ -159,6 +159,31 @@ def stage_verified_profile_review(
     )
 
 
+
+def stage_verified_operator_preview(
+    token: str,
+    *,
+    request_id: str,
+    introspector: LocalTokenIntrospector,
+    policy: DurableOwnerConsentPolicy,
+    now: datetime | None = None,
+) -> ReviewTicket:
+    """R12: five-minute unsigned PREVIEW after fresh live PhiID introspection.
+
+    Only a trusted local caller can request this staging mode; no HTTP
+    endpoint is provided. Subsequent R7 signatures stay <=30 seconds,
+    and every later actual candidate needs fresh introspection again.
+    """
+    if type(policy) is not DurableOwnerConsentPolicy:
+        raise PolicyDenied("durable operator preview requires trusted policy")
+    request = verified_profile_request(
+        token, introspector=introspector, request_id=request_id
+    )
+    policy.register_synthetic_self(request)
+    return policy.stage_operator_preview(
+        request, now=_utc(now if now is not None else datetime.now(timezone.utc))
+    )
+
 def evaluate_reviewed_profile_candidate(
     token: str,
     *,
