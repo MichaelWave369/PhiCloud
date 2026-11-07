@@ -26,8 +26,9 @@ from .local_consent import (
 )
 from .shield_policy import AuthorityEvidence, ConsentEvidence, EffectRequest, _utc
 from .local_consent import LocalOwnerConsentPolicy
+from .operator_approval import verified_receipt_expiry
 
-_VERSION = 1
+_VERSION = 2
 
 
 def _request_json(req: EffectRequest) -> str:
@@ -119,7 +120,7 @@ class DurableOwnerConsentPolicy:
     def _initialize(self) -> None:
         def create(conn):
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, _VERSION):
+            if version not in (0, 1, _VERSION):
                 raise PolicyDenied("unrecognized policy schema; fail closed")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS owners(
@@ -140,6 +141,29 @@ class DurableOwnerConsentPolicy:
                     approval_until_ms INTEGER,
                     PRIMARY KEY(issuer,subject,request_id),
                     FOREIGN KEY(issuer,subject) REFERENCES owners(issuer,subject)
+                )""")
+
+            # R7 migrates existing R6 databases without losing owners,
+            # previously approved entries, or irrevocable used ID tombstones.
+            existing = {
+                row[1] for row in conn.execute("PRAGMA table_info(requests)")
+            }
+            for column, declaration in (
+                ("signer_id", "TEXT"),
+                ("signer_kid", "TEXT"),
+                ("signed_receipt", "TEXT"),
+            ):
+                if column not in existing:
+                    conn.execute(
+                        f"ALTER TABLE requests ADD COLUMN {column} {declaration}"
+                    )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS operator_keys(
+                    operator_id TEXT NOT NULL,
+                    kid TEXT NOT NULL,
+                    public_key BLOB NOT NULL,
+                    revoked INTEGER NOT NULL DEFAULT 0 CHECK(revoked IN (0,1)),
+                    PRIMARY KEY(operator_id,kid)
                 )""")
             conn.execute(f"PRAGMA user_version={_VERSION}")
         self._transaction(create)
