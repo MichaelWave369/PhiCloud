@@ -50,3 +50,13 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Require explicit per-tenant typed confirmation in stdin JSON before an irreversible local revoke; no subject/email/token in argv, logs or response. Don't accept additional, duplicate or unrecognized request fields.
 - Atomically remove only that member's records and membership in one tenant; persist a local revocation tombstone. Do not remove other people's records or unrelated tenant memberships. Revoke remains effective against active Keycloak tokens because every HTTP request checks server-side membership after token introspection.
 - IdP logout/token revocation, production account deletion, backups/restore protection, cloud object deletion and real user file erasure are out of scope. Never represent this local test fixture as tamper-evident or suitable for production personal data.
+
+## R9 independent witness and backup-aware revocation
+
+- R9 is **only** an opt-in local, synthetic, single-host rollback guard. A witness file in a different private directory from SQLite must survive a SQLite-only restore. It is not tamper-proof or resistant to privileged restoration of both copies; never claim production safety.
+- Enrollment must be one-time, operator-confirmed and offline with the shared R8 SQLite process lease; neither endpoint nor service token may enroll a fence or reconcile a stale restore.
+- The R9 witness must be a separate owner-private non-symlink JSONL, never auto-recreated, overwritten, or placed under the same SQLite backup directory. Database startup refuses a missing/mismatched/truncated witness or missing binding. An enrolled DB opened without its witness must fail closed.
+- Append and fsync irreversible local witness revocation **before** modifying SQLite. If SQLite later fails, a mismatch must stop normal startup. Reconciliation may only remove memberships/markers and restore missing tombstones; NEVER add members or delete the witness to “fix” test failures.
+- Any still-active Keycloak token must remain blocked by server-side membership checks, even after an offline recovery. Keep explicit route scopes and per-resource ownership intact.
+- Never log raw OIDC subjects, credentials, bearer tokens, private file locations, or raw witness entries. No real cloud files, production backups, mailbox data, personal information, or PhiOS effects in this fixture.
+- A witness-only rollback guard is insufficient for multi-node deployments, backup integrity, encryption, adversarial host tampering or production account restoration. Those require independently protected recovery design and review.
