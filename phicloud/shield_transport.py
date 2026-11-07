@@ -14,6 +14,7 @@ import re
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
+from dataclasses import asdict
 from typing import Any, Mapping
 
 from .shield_policy import (
@@ -27,10 +28,10 @@ from .shield_policy import (
     evaluate_candidate,
 )
 
-SCHEMA = "phicloud.anc.authenticated.v1"
+SCHEMA = "phicloud.anc.authenticated.v2"
 FIELDS = frozenset({
     "schema", "producer_id", "kid", "audience", "request_id", "scope",
-    "nonce", "issued_at", "expires_at", "advisory", "mac",
+    "nonce", "issued_at", "expires_at", "request_binding", "advisory", "mac",
 })
 MAC_FIELDS = FIELDS - {"mac"}
 NAME = re.compile(r"^[a-z][a-z0-9._-]{1,63}$")
@@ -72,6 +73,19 @@ def _names(producer_id: str, kid: str) -> None:
         raise ValueError("invalid producer identity")
     if type(kid) is not str or not NAME.fullmatch(kid):
         raise ValueError("invalid key id")
+
+
+def _bind_request(secret: bytes, request: EffectRequest) -> str:
+    """Keyed, domain-separated digest of full issuer/sub/audience/action/resource.
+
+    Exposes no raw subject or resource fields in the envelope. A verifier must
+    derive it from trusted request context, never from the sender's assertion.
+    """
+    return hmac.new(
+        secret,
+        b"PHICLOUD_ANC_REQUEST_BINDING_V2\x00" + _canonical(asdict(request)),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _pairs_no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -155,6 +169,7 @@ def sign_local_advisory(
         "audience": request.audience,
         "request_id": request.request_id,
         "scope": request.scope,
+        "request_binding": _bind_request(key, request),
         "nonce": secrets.token_hex(16),
         "issued_at": instant.isoformat(),
         "expires_at": (instant + timedelta(seconds=ttl_seconds)).isoformat(),
@@ -189,6 +204,8 @@ def verify_local_advisory(
         or type(envelope["request_id"]) is not str or envelope["request_id"] != request.request_id
         or type(envelope["scope"]) is not str or envelope["scope"] != request.scope
         or type(envelope["nonce"]) is not str or not HEX_NONCE.fullmatch(envelope["nonce"])
+        or type(envelope["request_binding"]) is not str
+        or not HEX_MAC.fullmatch(envelope["request_binding"])
         or type(envelope["mac"]) is not str or not HEX_MAC.fullmatch(envelope["mac"])
     ):
         return None
@@ -197,6 +214,13 @@ def verify_local_advisory(
     try:
         _names(producer_id, envelope["kid"])
         key = _key(trusted_keys.get((producer_id, envelope["kid"])))
+        # The MAC envelope must identify the *full* operation. Reusing the
+        # same request ID for another subject, action or resource cannot
+        # launder a clean advisory into a new authorization context.
+        if not hmac.compare_digest(
+            _bind_request(key, request), envelope["request_binding"]
+        ):
+            return None
         issued = _instant(envelope["issued_at"])
         expires = _instant(envelope["expires_at"])
         if (
