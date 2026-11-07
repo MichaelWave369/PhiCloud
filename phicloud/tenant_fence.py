@@ -120,13 +120,26 @@ class RevocationWitness:
             raise WitnessError("duplicate_witness_revocation")
         self.records[pair] = timestamp
 
-    @classmethod
-    def enroll(cls, path: str | Path, *, db_path: str | Path,
-               database_id: str, existing: list[tuple[str, str, int]]):
+    @staticmethod
+    def preflight_enrollment(path: str | Path, db_path: str | Path) -> None:
+        """Reject predictable operator path mistakes before DB is marked."""
         target = Path(path)
         _private_directory(target)
         if target.parent == Path(db_path).parent:
             raise WitnessError("witness_must_be_outside_database_backup_directory")
+        try:
+            target.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise WitnessError("unsafe_witness_target") from exc
+        raise WitnessError("witness_already_enrolled")
+
+    @classmethod
+    def enroll(cls, path: str | Path, *, db_path: str | Path,
+               database_id: str, existing: list[tuple[str, str, int]]):
+        target = Path(path)
+        cls.preflight_enrollment(target, db_path)
         if len(existing) > MAX_EVENTS:
             raise WitnessError("witness_event_limit")
         checked = set()
