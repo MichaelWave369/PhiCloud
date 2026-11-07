@@ -21,6 +21,8 @@ const RESOURCE='phicloud-resource-dev';
 const CLOUD='http://127.0.0.1:8769';
 const READ='phicloud.tenant.read';
 const WRITE='phicloud.tenant.write';
+const SEALED_READ='phicloud.sealed.read';
+const SEALED_WRITE='phicloud.sealed.write';
 const CALLBACK='http://127.0.0.1:8786/auth/callback';
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
@@ -126,7 +128,7 @@ function tenantFixture(alice,bob) {
     ],
   });
 }
-async function withPython(dbPath,secret,provision,action,fencePath=null) {
+async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=null) {
   const env={
     ...process.env,
     NODE_ENV:'test',
@@ -139,6 +141,13 @@ async function withPython(dbPath,secret,provision,action,fencePath=null) {
   };
   if(provision)env.PHICLOUD_TENANT_PROVISION_JSON=provision;
   else delete env.PHICLOUD_TENANT_PROVISION_JSON;
+  if(keyPath){
+    env.PHICLOUD_ENABLE_SEALED_DEV='1';
+    env.PHICLOUD_SEALED_KEY_PATH=keyPath;
+  }else{
+    delete env.PHICLOUD_ENABLE_SEALED_DEV;
+    delete env.PHICLOUD_SEALED_KEY_PATH;
+  }
   if(fencePath) {
     env.PHICLOUD_ENABLE_FENCE_DEV='1';
     env.PHICLOUD_TENANT_FENCE_PATH=fencePath;
@@ -191,6 +200,8 @@ const check=async(r,status,label)=>assert.equal(r.status,status,label);
 async function runTests(adminToken,alice,bob,secret){
   const temp=mkdtempSync(join(tmpdir(),'phicloud-r6-e2e-'));
   const independent=mkdtempSync(join(tmpdir(),'phicloud-r9-witness-'));
+  const keyDirectory=mkdtempSync(join(tmpdir(),'phicloud-r10-independent-key-'));
+  const sealedKey=join(keyDirectory,'sealed-test.key');
   const path=join(temp,'private.sqlite');
   const fence=join(independent,'owner-revocations.jsonl');
   const snapshot=join(temp,'older-snapshot.sqlite');
@@ -236,6 +247,65 @@ async function runTests(adminToken,alice,bob,secret){
       const aAudit=await(await request(aliceRead,'GET',url('alpha-team','audit'))).json();
       assert.deepEqual(aAudit.events.map(x=>x.record_id),[aliceId]);
     });
+    console.log('R10: provision independent private AES-256-GCM key OFFLINE');
+    const keyProvision=spawnSync('python',[
+      '-m','phicloud.sealed_key_operator','--db',path,
+      '--key-path',sealedKey,'--confirm','CREATE SYNTHETIC TEST KEY'
+    ],{
+      encoding:'utf8',timeout:8000,
+      env:{...process.env,PHICLOUD_SEALED_KEY_OPERATOR_DEV:'1',
+        PHICLOUD_ENV:'test',NODE_ENV:'test'}
+    });
+    assert.equal(keyProvision.status,0,'R10 private offline key provisioning failed');
+    assert.ok(!keyProvision.stdout.includes('BEGIN PRIVATE'));
+    console.log('R10: real two-user Keycloak scoped encrypted test markers');
+    const sealedAliceRead=await login(alice,SEALED_READ);
+    const sealedAliceWrite=await login(alice,SEALED_WRITE);
+    const sealedBobRead=await login(bob,SEALED_READ);
+    const sealedBobWrite=await login(bob,SEALED_WRITE);
+    const sealedPath=(tenant,id)=>url(tenant,'sealed-markers'+(id?'/'+id:''));
+    let sealedAliceId,sealedBobId;
+    await withPython(path,secret,null,async()=>{
+      await check(await request(null,'GET',sealedPath('alpha-team')),401,
+        'anonymous cannot read encrypted canaries');
+      await check(await request(aliceRead,'GET',sealedPath('alpha-team')),401,
+        'R6 tenant token must not unlock R10 sealed endpoint');
+      await check(await request(sealedAliceRead,'POST',sealedPath('alpha-team'),
+        'create-sealed-test-marker'),401,'sealed read scope cannot write');
+      let result=await request(sealedAliceWrite,'POST',sealedPath('alpha-team'),
+        'create-sealed-test-marker');
+      await check(result,201,'Alice encrypted marker create');
+      sealedAliceId=(await result.json()).id;
+      result=await request(sealedBobWrite,'POST',sealedPath('alpha-team'),
+        'create-sealed-test-marker');
+      await check(result,201,'Bob encrypted marker create');
+      sealedBobId=(await result.json()).id;
+      await check(await request(sealedBobRead,'GET',
+        sealedPath('alpha-team',sealedAliceId)),404,'Bob encrypted cross-owner read');
+      await check(await request(sealedAliceRead,'GET',
+        sealedPath('alpha-team',sealedBobId)),404,'Alice encrypted cross-owner read');
+      await check(await request(sealedBobWrite,'DELETE',
+        sealedPath('alpha-team',sealedAliceId),'delete-sealed-test-marker'),404,
+        'Bob encrypted cross-owner delete');
+      const returned=await(await request(sealedAliceRead,'GET',
+        sealedPath('alpha-team',sealedAliceId))).json();
+      assert.equal(returned.encrypted_at_rest,true);
+      assert.equal(returned.authenticated_integrity,true);
+      assert.equal(returned.plaintext_returned,false);
+      assert.equal(returned.user_content_allowed,false);
+      assert.ok(!JSON.stringify(returned).includes('SYNTHETIC_CANARY_NOT_USER_CONTENT'));
+    },null,sealedKey);
+    console.log('R10: encrypted markers and owner checks survive SQLite restart');
+    await withPython(path,secret,null,async()=>{
+      await check(await request(sealedAliceRead,'GET',
+        sealedPath('alpha-team',sealedAliceId)),200,
+        'Alice encrypted marker survives restart');
+      await check(await request(sealedBobRead,'GET',
+        sealedPath('alpha-team',sealedBobId)),200,
+        'Bob encrypted marker survives restart');
+    },null,sealedKey);
+    console.log('PASS: R10 real-Keycloak AES-GCM canary, separate key, exact scopes, owner isolation and restart');
+
     console.log('R6: restarting resource server and reopening private SQLite');
     await withPython(path,secret,null,async()=>{
       await check(await request(aliceRead,'GET',url('alpha-team','records/'+aliceId)),200,
@@ -389,6 +459,7 @@ async function runTests(adminToken,alice,bob,secret){
   }finally{
     rmSync(temp,{recursive:true,force:true});
     rmSync(independent,{recursive:true,force:true});
+    rmSync(keyDirectory,{recursive:true,force:true});
   }
 }
 
@@ -401,6 +472,8 @@ async function main(){
     const secret=await createConfidentialResource(adminToken);
     await configureScope(adminToken,READ);
     await configureScope(adminToken,WRITE);
+    await configureScope(adminToken,SEALED_READ);
+    await configureScope(adminToken,SEALED_WRITE);
     alice=await fixture.createDisposableUser(adminToken);
     bob=await fixture.createDisposableUser(adminToken);
     await runTests(adminToken,alice,bob,secret);
