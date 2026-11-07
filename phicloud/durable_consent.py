@@ -665,7 +665,8 @@ class DurableOwnerConsentPolicy:
         self._transaction(revoke_tx)
 
     def consume(
-        self, request: EffectRequest, *, now: datetime, require_signed: bool = False
+        self, request: EffectRequest, *, now: datetime,
+        require_signed: bool = False, require_presence: bool = False
     ) -> tuple[AuthorityEvidence, ConsentEvidence]:
         """Spend exactly one request; optionally REQUIRE a trusted signed review.
 
@@ -674,23 +675,33 @@ class DurableOwnerConsentPolicy:
         authorize after key rotation or process restart.
         """
         instant = _utc(now)
-        if type(require_signed) is not bool or not self._allow(request):
+        if (
+            type(require_signed) is not bool or type(require_presence) is not bool
+            or not self._allow(request)
+        ):
             raise PolicyDenied("unsupported operation or review mode")
         def consume_tx(conn):
             row = conn.execute("""
                 SELECT r.review_id,r.request_json,r.state,r.review_until_ms,
                        r.approval_until_ms,o.revoked,r.signer_id,r.signer_kid,
-                       r.signed_receipt,k.public_key,k.revoked
+                       r.signed_receipt,k.public_key,k.revoked,
+                       r.presence_verified,r.presence_until_ms,
+                       r.presence_credential_id,c.revoked,c.operator_id,
+                       c.rp_id,c.origin
                 FROM requests r JOIN owners o
                   ON r.issuer=o.issuer AND r.subject=o.subject
                 LEFT JOIN operator_keys k
                   ON r.signer_id=k.operator_id AND r.signer_kid=k.kid
+                LEFT JOIN operator_credentials c
+                  ON r.presence_credential_id=c.credential_id
                 WHERE r.issuer=? AND r.subject=? AND r.request_id=?
             """, (request.subject_issuer,request.subject_id,request.request_id)).fetchone()
             if row is None:
                 raise PolicyDenied("missing owner approval")
             (review_id,saved,state,review_until,deadline,owner_revoked,
-             signer_id,kid,receipt_json,key,key_revoked) = row
+             signer_id,kid,receipt_json,key,key_revoked,
+             present,presence_until,credential_id,cred_revoked,
+             cred_operator,rp_id,origin) = row
             if owner_revoked or state != "approved" or deadline is None:
                 raise PolicyDenied("approval absent, revoked or already consumed")
             # Consume BEFORE independently rechecking the signature so
@@ -703,6 +714,16 @@ class DurableOwnerConsentPolicy:
                 return _SpentApproval("mismatched or expired approval")
             if require_signed and signer_id is None:
                 return _SpentApproval("independently signed review required")
+            if require_presence:
+                if (
+                    signer_id is None or present != 1
+                    or type(presence_until) is not int
+                    or _milliseconds(instant) >= presence_until
+                    or type(credential_id) is not bytes
+                    or cred_revoked != 0 or cred_operator != signer_id
+                    or rp_id != RP_ID or origin != ORIGIN
+                ):
+                    return _SpentApproval("unrevoked WebAuthn user-verification stepup required")
             if signer_id is not None:
                 if (
                     type(kid) is not str or key is None or key_revoked != 0
