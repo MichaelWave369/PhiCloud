@@ -70,6 +70,42 @@ def _check_db_path(path: Path) -> None:
         raise LocalTenantConfigError("private_file_0600_required")
 
 
+def _acquire_private_database_lock(db_path: Path) -> int:
+    """Exclusive POSIX advisory lock shared by app and offline operator.
+
+    The lock file is never unlinked, preventing process-to-process inode swaps.
+    A running server makes the offline membership command fail immediately.
+    """
+    import fcntl
+
+    lock_path = Path(str(db_path) + ".lock")
+    existing = _path_stat(lock_path)
+    if existing is not None and (
+        not stat.S_ISREG(existing.st_mode)
+        or stat.S_ISLNK(existing.st_mode)
+        or existing.st_mode & 0o077
+    ):
+        raise LocalTenantConfigError("unsafe_tenant_lock_file")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    old_mask = os.umask(0o077)
+    try:
+        fd = os.open(str(lock_path), flags, 0o600)
+    finally:
+        os.umask(old_mask)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_mode & 0o077:
+            raise LocalTenantConfigError("unsafe_tenant_lock_file")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise LocalTenantConfigError("tenant_database_in_use_stop_service_first") from exc
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def _principal(principal) -> tuple[str, str]:
     issuer = getattr(principal, "issuer", None)
     subject = getattr(principal, "sub", None)
@@ -85,12 +121,17 @@ class LocalTenantStore:
     def __init__(self, path: str | Path, *, clock=time.time) -> None:
         self.path = Path(path)
         _check_db_path(self.path)
+        self._lease_fd = _acquire_private_database_lock(self.path)
         self._lock = threading.RLock()
         self._clock = clock
         old_mask = os.umask(0o077)
         try:
-            self._db = sqlite3.connect(str(self.path), isolation_level=None,
-                                       check_same_thread=False, timeout=3.0)
+            try:
+                self._db = sqlite3.connect(str(self.path), isolation_level=None,
+                                           check_same_thread=False, timeout=3.0)
+            except Exception:
+                os.close(self._lease_fd)
+                raise
         finally:
             os.umask(old_mask)
         os.chmod(self.path, 0o600)
@@ -129,6 +170,13 @@ class LocalTenantStore:
             );
             CREATE INDEX IF NOT EXISTS audit_by_owner
               ON audit(tenant_id, actor_key, seq);
+            CREATE TABLE IF NOT EXISTS membership_revocations (
+                tenant_id TEXT NOT NULL,
+                principal_key TEXT NOT NULL,
+                revoked_at INTEGER NOT NULL,
+                removed_markers INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, principal_key)
+            );
         """)
         with self._lock:
             row = self._db.execute(
@@ -144,7 +192,12 @@ class LocalTenantStore:
 
     def close(self) -> None:
         with self._lock:
-            self._db.close()
+            try:
+                self._db.close()
+            finally:
+                if self._lease_fd is not None:
+                    os.close(self._lease_fd)
+                    self._lease_fd = None
 
     def _now(self) -> int:
         return int(self._clock())
@@ -216,6 +269,87 @@ class LocalTenantStore:
                             (tenant_id, key))
                 self._db.execute("INSERT INTO metadata(key,value) VALUES('provisioned','1')")
                 self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+
+    def preview_member_removal(self, tenant_id: str, principal) -> dict:
+        """Operator-only preview, never reachable from HTTP routes."""
+        tenant_id = self._tenant_id(tenant_id)
+        key = self._owner_key(principal)
+        with self._lock:
+            active = self._db.execute(
+                "SELECT 1 FROM memberships WHERE tenant_id=? AND principal_key=?",
+                (tenant_id, key)).fetchone() is not None
+            markers = self._db.execute(
+                "SELECT COUNT(*) FROM records WHERE tenant_id=? AND owner_key=?",
+                (tenant_id, key)).fetchone()[0]
+            revoked = self._db.execute(
+                "SELECT 1 FROM membership_revocations WHERE tenant_id=? AND principal_key=?",
+                (tenant_id, key)).fetchone() is not None
+            return {
+                "schema": "phicloud.local-tenant-removal.v0.1",
+                "tenant": tenant_id,
+                "membership_active": active,
+                "existing_markers": markers,
+                "previously_revoked": revoked,
+                "external_token_revoked": False,
+                "regrant_supported": False,
+                "production_effects": False,
+            }
+
+    def revoke_member_offline(self, tenant_id: str, principal) -> dict:
+        """One-way local membership removal and owned marker purge.
+
+        REQUIRES the exclusive process lease, a trusted *offline* operator,
+        and an explicit confirmation outside this store. No HTTP route calls it.
+        Existing synthetic create/delete audit rows are retained for 90 days.
+        """
+        tenant_id = self._tenant_id(tenant_id)
+        key = self._owner_key(principal)
+        now = self._now()
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                # Never regrant; reject malformed DB where a revoked user has
+                # become a member again, rather than silently erasing evidence.
+                previous = self._db.execute(
+                    "SELECT 1 FROM membership_revocations WHERE tenant_id=? AND principal_key=?",
+                    (tenant_id, key)).fetchone()
+                active = self._db.execute(
+                    "SELECT 1 FROM memberships WHERE tenant_id=? AND principal_key=?",
+                    (tenant_id, key)).fetchone()
+                if previous and active:
+                    raise LocalTenantConfigError("revoked_member_unexpectedly_active")
+                if not active:
+                    self._db.execute("COMMIT")
+                    return {
+                        "schema": "phicloud.local-tenant-removal.v0.1",
+                        "tenant": tenant_id, "changed": False,
+                        "previously_revoked": bool(previous),
+                        "removed_markers": 0,
+                        "external_token_revoked": False,
+                        "production_effects": False,
+                    }
+                removed = self._db.execute(
+                    "DELETE FROM records WHERE tenant_id=? AND owner_key=?",
+                    (tenant_id, key)).rowcount
+                self._db.execute(
+                    "DELETE FROM memberships WHERE tenant_id=? AND principal_key=?",
+                    (tenant_id, key))
+                self._db.execute(
+                    "INSERT INTO membership_revocations"
+                    " (tenant_id,principal_key,revoked_at,removed_markers)"
+                    " VALUES(?,?,?,?)", (tenant_id, key, now, removed))
+                self._db.execute("COMMIT")
+                return {
+                    "schema": "phicloud.local-tenant-removal.v0.1",
+                    "tenant": tenant_id,
+                    "changed": True, "previously_revoked": False,
+                    "removed_markers": removed,
+                    "external_token_revoked": False,
+                    "production_effects": False,
+                }
             except Exception:
                 self._db.execute("ROLLBACK")
                 raise
