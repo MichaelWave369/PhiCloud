@@ -1,0 +1,85 @@
+name: PhiCloud R6 durable tenant-owner smoke
+
+on:
+  pull_request:
+    paths:
+      - 'phicloud/**'
+      - 'tests/test_tenant_store.py'
+      - 'tests/keycloak_tenant_e2e.mjs'
+      - '.github/workflows/tenant-durable-e2e.yml'
+      - 'docs/R6_*'
+  push:
+    branches: [main]
+    paths:
+      - 'phicloud/**'
+      - 'tests/test_tenant_store.py'
+      - 'tests/keycloak_tenant_e2e.mjs'
+      - '.github/workflows/tenant-durable-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  durable-tenant-e2e:
+    name: Two real Keycloak users + private SQLite tenant ownership
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout PhiCloud
+        uses: actions/checkout@v4
+
+      - name: Checkout exact reviewed PhiID dev fixture
+        uses: actions/checkout@v4
+        with:
+          repository: MichaelWave369/PhiID
+          ref: 1dac6a8dc89214debe126498bffbf700aaa0cef5
+          path: integration/phiid
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned OIDC development fixture
+        working-directory: integration/phiid
+        run: npm install --no-audit --no-fund
+
+      - name: Validate private store and runner syntax
+        run: |
+          python -m compileall -q phicloud tests
+          python -m unittest discover -s tests -p 'test_*.py' -v
+          node --check tests/keycloak_tenant_e2e.mjs
+
+      - name: Create private per-run Keycloak admin credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          password="$(openssl rand -hex 32)"
+          echo "::add-mask::${password}"
+          {
+            echo "KC_BOOTSTRAP_ADMIN_USERNAME=ci-admin"
+            echo "KC_BOOTSTRAP_ADMIN_PASSWORD=${password}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Start disposable Keycloak on localhost
+        run: docker compose -f integration/phiid/dev/keycloak/compose.yaml up -d
+
+      - name: Verify real two-user tenant ownership and durable audit
+        env:
+          PHIID_E2E_ENABLE: '1'
+          PHICLOUD_TENANT_REAL_E2E: '1'
+          NODE_ENV: test
+        run: node tests/keycloak_tenant_e2e.mjs
+
+      - name: Remove disposable provider even on preflight failure
+        if: always()
+        shell: bash
+        run: |
+          export KC_BOOTSTRAP_ADMIN_USERNAME="${KC_BOOTSTRAP_ADMIN_USERNAME:-cleanup-only}"
+          export KC_BOOTSTRAP_ADMIN_PASSWORD="${KC_BOOTSTRAP_ADMIN_PASSWORD:-not-used}"
+          docker compose -f integration/phiid/dev/keycloak/compose.yaml down --remove-orphans
