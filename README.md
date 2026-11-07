@@ -74,6 +74,22 @@ or a remotely accessible security API.
 See [the PhiShield R0 trust boundary](docs/PHISHIELD_ANC_LOCAL_R0.md).
 Test locally with `python -m unittest discover -s tests -v`.
 
+## PhiShield R1: authenticated local ANC advisory (prototype)
+
+The opt-in [local authenticated advisory envelope](docs/PHISHIELD_AUTHENTICATED_R1.md)
+wraps ANC R1 risk evidence with a standard HMAC-SHA256 message authentication
+tag, bounded validity period, request/audience binding and a single-process
+nonce replay check. It is verified **before** the existing PhiShield
+`DENY` / `REVIEW` / `CANDIDATE` policy consumer.
+
+This is still a local test boundary. No trusted key-management service,
+OIDC verifier, remote authentication, durable replay store, live policy API,
+or PhiOS execution permission is created. The existing local registry
+continues to expose **read-only declarations only**.
+
+`python -m unittest discover -s tests -v` tests it; the existing pinned
+ANC cross-repository CI smoke also exercises the authenticated handoff.
+
 ## Existing projects
 
 - [PhiOS](https://github.com/MichaelWave369/PhiOS)
