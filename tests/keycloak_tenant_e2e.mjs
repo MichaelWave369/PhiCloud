@@ -452,7 +452,7 @@ async function runTests(adminToken,alice,bob,secret){
     assert.notEqual(stale.status,0,
       'R12 stale restored SQLite and matching old KEK unexpectedly bypassed witness');
 
-    const recovered=spawnSync('python',[
+    const r12RewrapResult=spawnSync('python',[
       '-m','phicloud.envelope_operator','--db',path,
       '--old-key',envelopeNew,'--new-key',envelopeThird,
       '--rotation-witness',rotationWitness,'--resume-pending',
@@ -462,8 +462,8 @@ async function runTests(adminToken,alice,bob,secret){
       env:{...process.env,PHICLOUD_ENVELOPE_OPERATOR_DEV:'1',
            PHICLOUD_ENV:'test',NODE_ENV:'test'}
     });
-    assert.equal(recovered.status,0,'R12 offline exact pending-epoch reconciliation');
-    assert.ok(recovered.stdout.includes('rewrapped_markers=2'));
+    assert.equal(r12RewrapResult.status,0,'R12 offline exact pending-epoch reconciliation');
+    assert.ok(r12RewrapResult.stdout.includes('rewrapped_markers=2'));
 
     await withPython(path,secret,null,async()=>{
       await check(await request(envelopeAliceRead,'GET',
