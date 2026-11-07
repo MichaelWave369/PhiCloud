@@ -22,3 +22,13 @@ PhiCloud is an open-source integration layer. **Capability is not authority.**
 - Scope `phicloud.profile.read` and audience `phicloud-resource-dev` are for **this specific demo resource**, not a wildcard authority across the ecosystem.
 - The real integration test creates disposable Keycloak clients/scopes/users at runtime; it does not modify PhiID's committed realm or require actual user accounts.
 - Real stored resources require separately verified subject ownership, tenant, operation-level policy, record deletion, auditing and an independent local PhiOS effect gate.
+
+## R4 owner-isolation development proof
+
+- Do not accept caller-supplied owner or actor IDs, file names, content, or storage object paths. Bind every R4 demo record to the **real introspection-verified** `(iss,sub)` at request time.
+- R4 remains disabled unless explicitly opted in alongside the existing R3 OAuth gate. All routes stay IPv4 loopback-only. Never connect an R4 record to real files, object storage, Gmail, data exports, or PhiOS device effects.
+- Enforce separate exact `phicloud.demo.read` and `phicloud.demo.write` scopes with audience `phicloud-resource-dev`. An authenticated account, R3 profile-only token, consent receipt or Pocket approval does not authorize an R4 operation.
+- Re-introspect EVERY request; fail closed on provider outage and upstream revocation, do not cache authorized decisions.
+- Foreign IDs and nonexistent IDs return identical 404 responses; never reveal existence across users. Keep data ephemeral, bounded and free of personal information.
+- Require a guarded mutation action header, no request bodies, and exact loopback origin for browser-originated mutations. Test arbitrary owner injection, timeouts, concurrency, expiry, capacity, cross-user delete and logout isolation.
+- A passed R4 test is not production storage or tenant isolation. Any real owner database and internet deployment requires independent security review, HTTPS, durable policy enforcement, encryption and recovery guarantees.
