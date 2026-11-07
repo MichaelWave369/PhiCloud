@@ -92,3 +92,14 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [x] Extend real two-user Keycloak integration to prove still-active token cannot resurrect removed membership after restart
 - [ ] Obtain all CI checks green and review after other active PhiCloud PRs merge
 - [ ] Design production-safe tenant lifecycle, backup-aware revocation and real file data protection separately
+
+## R9: Independent revocation witness vs stale SQLite backups
+
+- [x] Add opt-in, separate owner-private append-only JSONL witness bound to existing SQLite test fixture
+- [x] Carry forward old R8 tenant tombstones on one-time operator enrollment; block missing, unsafe, mismatched or stale backup state
+- [x] Append+fsync witness before transactionally revoking tenant membership; fail closed on crash window or restored stale SQLite
+- [x] Provide offline revoke-only reconciliation with explicit operator acknowledgment and durable recovery count; never regrant access
+- [x] Add unit tests for stale snapshot denial, crash/rollback, missing/corrupted witness, duplicate entries and safe, idempotent repair
+- [x] Extend real two-user Keycloak CI to restore older SQLite only and prove a still-active token cannot regain membership after reconciliation
+- [ ] Verify latest-head Python/ANC and both real Keycloak workflows pass, then review and merge
+- [ ] External tamper-resistant revocation authority, tenant lifecycle and encrypted real resource storage remain separate future security gates

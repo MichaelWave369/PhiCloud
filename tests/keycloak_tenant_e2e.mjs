@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
 import {once} from 'node:events';
 import {createRequire} from 'node:module';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {mkdtempSync,rmSync,copyFileSync,renameSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -126,7 +126,7 @@ function tenantFixture(alice,bob) {
     ],
   });
 }
-async function withPython(dbPath,secret,provision,action) {
+async function withPython(dbPath,secret,provision,action,fencePath=null) {
   const env={
     ...process.env,
     NODE_ENV:'test',
@@ -139,6 +139,13 @@ async function withPython(dbPath,secret,provision,action) {
   };
   if(provision)env.PHICLOUD_TENANT_PROVISION_JSON=provision;
   else delete env.PHICLOUD_TENANT_PROVISION_JSON;
+  if(fencePath) {
+    env.PHICLOUD_ENABLE_FENCE_DEV='1';
+    env.PHICLOUD_TENANT_FENCE_PATH=fencePath;
+  }else{
+    delete env.PHICLOUD_ENABLE_FENCE_DEV;
+    delete env.PHICLOUD_TENANT_FENCE_PATH;
+  }
   const child=spawn('python',['-m','phicloud.server','--port','8769'],{
     env,stdio:['ignore','pipe','pipe'],
   });
@@ -183,7 +190,10 @@ const url=(team,tail='records')=>'/v1/private/tenants/'+team+'/'+tail;
 const check=async(r,status,label)=>assert.equal(r.status,status,label);
 async function runTests(adminToken,alice,bob,secret){
   const temp=mkdtempSync(join(tmpdir(),'phicloud-r6-e2e-'));
+  const independent=mkdtempSync(join(tmpdir(),'phicloud-r9-witness-'));
   const path=join(temp,'private.sqlite');
+  const fence=join(independent,'owner-revocations.jsonl');
+  const snapshot=join(temp,'older-snapshot.sqlite');
   let aliceRead,aliceWrite,bobRead,bobWrite;
   try{
     aliceRead=await login(alice,READ);
@@ -307,11 +317,78 @@ async function runTests(adminToken,alice,bob,secret){
       await check(await request(bobRead,'GET',url('beta-team','records/'+betaId)),200,
         'unrelated tenant membership must remain usable');
     });
+    console.log('R9: enrolling independent private witness with existing R8 tombstone');
+    const recoveryCmd=(mode)=>[
+      '-m','phicloud.tenant_recovery','--db',path,'--witness',fence,'--'+mode
+    ];
+    const recoveryEnv={
+      ...process.env, PHICLOUD_TENANT_RECOVERY_DEV:'1',
+      PHICLOUD_ENV:'test',NODE_ENV:'test',
+    };
+    const runRecovery=(mode,confirmation)=>spawnSync('python',recoveryCmd(mode),{
+      input:JSON.stringify({
+        schema:'phicloud.tenant-recovery-operator/0.1',
+        confirmation,
+      }),
+      encoding:'utf8',env:recoveryEnv,timeout:9000,
+    });
+    const enrolled=runRecovery('enroll','ENROLL INDEPENDENT WITNESS');
+    assert.equal(enrolled.status,0,'offline witness enrollment must succeed');
+    assert.equal(JSON.parse(enrolled.stdout).existing_revocations,1);
+    assert.ok(!enrolled.stdout.includes(bob.userId));
+    copyFileSync(path,snapshot);
+
+    console.log('R9: append second revocation to independent witness');
+    const revokeBeta=JSON.stringify({
+      schema:'phicloud.local-tenant-operator-request.v0.1',
+      tenant:'beta-team',
+      member:{iss:ISSUER,sub:bob.userId},
+      acknowledge:'REVOKE beta-team',
+    });
+    const guardedOperator=spawnSync('python',[
+      '-m','phicloud.tenant_operator','--db',path,'--apply'
+    ],{
+      input:revokeBeta,encoding:'utf8',timeout:9000,
+      env:{
+        ...operatorEnv,PHICLOUD_ENABLE_FENCE_DEV:'1',
+        PHICLOUD_TENANT_FENCE_PATH:fence,
+      }
+    });
+    assert.equal(guardedOperator.status,0,'witnessed operator revoke failed');
+    assert.equal(JSON.parse(guardedOperator.stdout).removed_markers,1);
+
+    console.log('R9: restoring stale SQLite snapshot WITHOUT rewinding separate witness');
+    copyFileSync(snapshot,path);
+    const startup=spawnSync('python',[
+      '-c', 'import sys; from phicloud.tenant_store import LocalTenantStore; '+
+      'LocalTenantStore(sys.argv[1],fence_path=sys.argv[2])',
+      path,fence
+    ],{encoding:'utf8',timeout:7000});
+    assert.notEqual(startup.status,0,'stale SQLite snapshot unexpectedly accepted');
+
+    console.log('R9: offline revoke-only reconciliation and post-recovery denial');
+    const repaired=runRecovery('reconcile','RECONCILE REVOKE ONLY');
+    assert.equal(repaired.status,0,'safe recovery must reapply independent revocation');
+    const recovered=JSON.parse(repaired.stdout);
+    assert.equal(recovered.reconciled_revocations,1);
+    assert.equal(recovered.access_regranted,false);
+    await withPython(path,secret,null,async()=>{
+      await check(await request(bobRead,'GET',url('beta-team')),404,
+        'still-valid Keycloak bearer was able to use restored beta membership');
+      await check(await request(bobWrite,'POST',url('beta-team'),
+        'create-tenant-test-record'),404,
+        'still-valid Keycloak write token regranted beta membership');
+      await check(await request(bobRead,'GET',url('alpha-team')),404,
+        'earlier alpha-team revoke must also remain effective');
+    },fence);
+    console.log('PASS: R9 stale backup rejected; independent witness reapplies revoked membership, no real data');
+
     console.log('PASS: R8 offline operator revocation survives restart, denies still-active scoped token, preserves other tenant');
     console.log('PASS: real Keycloak two-subject tenant membership, owner isolation, scoped operations, durable deletes/audit, restart and independent revocation');
     console.log('BOUNDARY: no PhiVault files, user-supplied content, hosted storage, email or PhiOS actions');
   }finally{
     rmSync(temp,{recursive:true,force:true});
+    rmSync(independent,{recursive:true,force:true});
   }
 }
 

@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from .authz import ISSUER
+from .tenant_fence import RevocationWitness, WitnessError
 
 TENANT_SCHEMA = "phicloud.local-tenant-demo.v0.1"
 _TENANT = re.compile(r"^[a-z][a-z0-9-]{2,31}$")
@@ -118,12 +119,16 @@ def _principal(principal) -> tuple[str, str]:
 class LocalTenantStore:
     """One-process, lock-protected SQLite store with atomic tenant/owner checks."""
 
-    def __init__(self, path: str | Path, *, clock=time.time) -> None:
+    def __init__(self, path: str | Path, *, clock=time.time,
+                 fence_path: str | Path | None = None,
+                 recovery_mode: bool = False) -> None:
         self.path = Path(path)
         _check_db_path(self.path)
         self._lease_fd = _acquire_private_database_lock(self.path)
         self._lock = threading.RLock()
         self._clock = clock
+        self._fence = None
+        self._recovery_mode = recovery_mode
         old_mask = os.umask(0o077)
         try:
             try:
@@ -177,6 +182,11 @@ class LocalTenantStore:
                 removed_markers INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, principal_key)
             );
+            CREATE TABLE IF NOT EXISTS recovery_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                at INTEGER NOT NULL,
+                restored_revocations INTEGER NOT NULL
+            );
         """)
         with self._lock:
             row = self._db.execute(
@@ -189,6 +199,15 @@ class LocalTenantStore:
             if len(row[0]) != 64 or not re.fullmatch("[a-f0-9]{64}", row[0]):
                 raise LocalTenantConfigError("malformed_local_principal_salt")
             self._salt = bytes.fromhex(row[0])
+        try:
+            self._load_recovery_fence(fence_path)
+        except Exception:
+            try:
+                self._db.close()
+            finally:
+                os.close(self._lease_fd)
+                self._lease_fd = None
+            raise
 
     def close(self) -> None:
         with self._lock:
@@ -198,6 +217,135 @@ class LocalTenantStore:
                 if self._lease_fd is not None:
                     os.close(self._lease_fd)
                     self._lease_fd = None
+
+    def _load_recovery_fence(self, fence_path) -> None:
+        row = self._db.execute(
+            "SELECT value FROM metadata WHERE key='recovery_fence_id'").fetchone()
+        if row is None:
+            if fence_path is not None:
+                raise LocalTenantConfigError("database_not_enrolled_in_recovery_fence")
+            return
+        if not fence_path:
+            raise LocalTenantConfigError("enrolled_database_requires_independent_fence")
+        try:
+            self._fence = RevocationWitness(
+                fence_path, db_path=self.path, database_id=row[0])
+        except WitnessError as exc:
+            raise LocalTenantConfigError(str(exc)) from exc
+        if not self._recovery_mode:
+            self._assert_fence_consistent()
+
+    def _assert_fence_consistent(self) -> None:
+        if self._fence is None:
+            return
+        database_tombstones = {
+            (tenant, key): timestamp for tenant, key, timestamp in
+            self._db.execute(
+                "SELECT tenant_id,principal_key,revoked_at FROM membership_revocations"
+            ).fetchall()
+        }
+        if database_tombstones != self._fence.records:
+            raise LocalTenantConfigError("stale_or_mismatched_sqlite_revocations")
+        for tenant, key in self._fence.records:
+            active = self._db.execute(
+                "SELECT 1 FROM memberships WHERE tenant_id=? AND principal_key=?",
+                (tenant, key)).fetchone()
+            resources = self._db.execute(
+                "SELECT 1 FROM records WHERE tenant_id=? AND owner_key=?",
+                (tenant, key)).fetchone()
+            if active or resources:
+                raise LocalTenantConfigError("revoked_tenant_access_in_restored_sqlite")
+
+    def enroll_recovery_fence(self, fence_path: str | Path) -> dict:
+        """One-time OFFLINE operator enrollment; never expose through HTTP."""
+        if self._fence is not None or self._db.execute(
+            "SELECT 1 FROM metadata WHERE key='recovery_fence_id'").fetchone():
+            raise LocalTenantConfigError("recovery_fence_already_enrolled")
+        if not self._db.execute(
+            "SELECT 1 FROM metadata WHERE key='provisioned'").fetchone():
+            raise LocalTenantConfigError("tenant_provisioning_required_before_fence")
+        existing = self._db.execute(
+            "SELECT tenant_id,principal_key,revoked_at FROM membership_revocations"
+            " ORDER BY tenant_id,principal_key").fetchall()
+        # Validate obvious invalid destination before writing the irreversible
+        # SQLite enrollment marker. O_EXCL protects the subsequent file create.
+        try:
+            RevocationWitness.preflight_enrollment(fence_path, self.path)
+        except WitnessError as exc:
+            raise LocalTenantConfigError(str(exc)) from exc
+        new_id = secrets.token_hex(32)
+        with self._lock:
+            # Bind the DB first: if file creation fails, subsequent server
+            # startup MUST fail closed rather than quietly run unfenced.
+            self._db.execute(
+                "INSERT INTO metadata(key,value) VALUES('recovery_fence_id',?)",
+                (new_id,))
+            try:
+                self._fence = RevocationWitness.enroll(
+                    fence_path, db_path=self.path, database_id=new_id,
+                    existing=existing)
+            except WitnessError as exc:
+                raise LocalTenantConfigError(str(exc)) from exc
+            self._assert_fence_consistent()
+        return {
+            "schema": "phicloud.tenant-recovery-result/0.1",
+            "enrolled": True, "existing_revocations": len(existing),
+            "independent_witness": True, "production_effects": False,
+        }
+
+    def reconcile_recovery_fence(self) -> dict:
+        """OFFLINE, one-way, crash-safe recovery: revoke, NEVER regrant."""
+        if not self._recovery_mode or self._fence is None:
+            raise LocalTenantConfigError("offline_recovery_mode_and_fence_required")
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                database = {
+                    (tenant, key): timestamp for tenant, key, timestamp in
+                    self._db.execute(
+                        "SELECT tenant_id,principal_key,revoked_at"
+                        " FROM membership_revocations").fetchall()
+                }
+                # We cannot infer whether DB-only tombstones were newly
+                # created or witness entries were lost. Fail closed.
+                if any(pair not in self._fence.records
+                       or self._fence.records[pair] != at
+                       for pair, at in database.items()):
+                    raise LocalTenantConfigError("unwitnessed_sqlite_revocation")
+                changes = 0
+                for (tenant, key), at in self._fence.records.items():
+                    member = self._db.execute(
+                        "DELETE FROM memberships"
+                        " WHERE tenant_id=? AND principal_key=?",
+                        (tenant, key)).rowcount
+                    removed = self._db.execute(
+                        "DELETE FROM records"
+                        " WHERE tenant_id=? AND owner_key=?",
+                        (tenant, key)).rowcount
+                    if (tenant, key) not in database:
+                        self._db.execute(
+                            "INSERT INTO membership_revocations"
+                            " (tenant_id,principal_key,revoked_at,removed_markers)"
+                            " VALUES(?,?,?,?)", (tenant, key, at, removed))
+                    if member or removed or (tenant, key) not in database:
+                        changes += 1
+                if changes:
+                    self._db.execute(
+                        "INSERT INTO recovery_events(at,restored_revocations)"
+                        " VALUES(?,?)", (self._now(), changes))
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+            self._assert_fence_consistent()
+            return {
+                "schema": "phicloud.tenant-recovery-result/0.1",
+                "reconciled_revocations": changes,
+                "revocation_entries": len(self._fence.records),
+                "access_regranted": False,
+                "external_tokens_revoked": False,
+                "production_effects": False,
+            }
 
     def _now(self) -> int:
         return int(self._clock())
@@ -331,6 +479,11 @@ class LocalTenantStore:
                         "external_token_revoked": False,
                         "production_effects": False,
                     }
+                # Persist the independent witness BEFORE changing SQLite.
+                # Crash/failure in the second write causes fail-closed
+                # divergence, repairable only by offline revoke-only reconcile.
+                if self._fence is not None:
+                    self._fence.append(tenant_id, key, now)
                 removed = self._db.execute(
                     "DELETE FROM records WHERE tenant_id=? AND owner_key=?",
                     (tenant_id, key)).rowcount
@@ -355,6 +508,8 @@ class LocalTenantStore:
                 raise
 
     def _require_member(self, tenant_id: str, key: str) -> None:
+        if self._fence is not None and (tenant_id, key) in self._fence.records:
+            raise LocalTenantError("unknown_resource")
         row = self._db.execute(
             "SELECT 1 FROM memberships WHERE tenant_id = ? AND principal_key = ?",
             (tenant_id, key)).fetchone()
@@ -491,7 +646,13 @@ def create_tenant_store(env: dict | None = None) -> LocalTenantStore | None:
     db_path = settings.get("PHICLOUD_TENANT_DB_PATH")
     if not db_path:
         raise LocalTenantConfigError("private_absolute_db_path_required")
-    store = LocalTenantStore(db_path)
+    fence_enabled = settings.get("PHICLOUD_ENABLE_FENCE_DEV") == "1"
+    if settings.get("PHICLOUD_TENANT_FENCE_PATH") and not fence_enabled:
+        raise LocalTenantConfigError("explicit_recovery_fence_opt_in_required")
+    if fence_enabled and not settings.get("PHICLOUD_TENANT_FENCE_PATH"):
+        raise LocalTenantConfigError("private_recovery_fence_path_required")
+    store = LocalTenantStore(db_path, fence_path=(
+        settings.get("PHICLOUD_TENANT_FENCE_PATH") if fence_enabled else None))
     fixture = settings.get("PHICLOUD_TENANT_PROVISION_JSON")
     if fixture:
         if len(fixture) > 8_192:
