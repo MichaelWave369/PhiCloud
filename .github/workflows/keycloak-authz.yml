@@ -58,6 +58,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_*.py' -v
           node --check tests/keycloak_authz_e2e.mjs
           node --check phicloud/static/operator_approve.js
+          node --check phicloud/static/operator_deferred.js
 
       - name: Generate one-time private Keycloak admin password
         shell: bash
