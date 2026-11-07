@@ -289,6 +289,32 @@ class DeferredOperatorApproval:
             "nonce":secrets.token_hex(16),
         }
         try:
+            # Never ask an external signer to sign an already revoked,
+            # expired, spent, replaced, or already-challenged request.
+            # The R9 transaction independently rechecks after signing too.
+            def current(conn):
+                row=conn.execute("""
+                    SELECT r.request_json,r.review_until_ms,r.presence_challenge,
+                           o.revoked,k.revoked,c.revoked
+                    FROM requests r JOIN owners o
+                      ON o.issuer=r.issuer AND o.subject=r.subject
+                    JOIN operator_keys k
+                      ON k.operator_id=? AND k.kid=?
+                    JOIN operator_credentials c
+                      ON c.credential_id=? AND c.operator_id=?
+                    WHERE r.review_id=? AND r.state='pending'
+                """,(
+                    self.operator_id,self.kid,self.credential_id,
+                    self.operator_id,self.review_id,
+                )).fetchone()
+                if (
+                    row is None or any(flag != 0 for flag in (row[3],row[4],row[5]))
+                    or row[2] is not None
+                    or row[1] <= issued
+                    or json.loads(row[0]) != asdict(self.request)
+                ):
+                    raise PolicyDenied("staged request or operator trust changed")
+            self.policy._transaction(current)
             sig=self.signer.sign(
                 canonical_message(body),operator_id=self.operator_id,kid=self.kid
             )
