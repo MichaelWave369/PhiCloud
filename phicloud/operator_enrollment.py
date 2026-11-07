@@ -16,7 +16,7 @@ import secrets
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -203,9 +203,9 @@ class LocalOperatorEnrollment:
         }
 
 
-class OneShotServer(ThreadingHTTPServer):
+class OneShotServer(HTTPServer):
     allow_reuse_address = False
-    daemon_threads = True
+    # Single-threaded to serialize pairing/challenge/commit transitions.
 
 
 def handler_factory(ceremony: LocalOperatorEnrollment):
