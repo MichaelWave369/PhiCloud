@@ -1,0 +1,13 @@
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color-scheme:dark;background:#0c1119;color:#e8edf8}
+body{margin:0;padding:2rem 1rem}
+main{max-width:680px;margin:1rem auto;padding:2rem;border:1px solid #39465a;border-radius:1rem;background:#171f2c}
+h1{margin-top:0;color:#c7dbff}
+.warning{color:#ffd5a3}
+li{margin:.7rem 0}
+label{display:block;margin-top:1rem}
+input,button{font:inherit;padding:.8rem 1rem;border-radius:.5rem;border:1px solid #6d809c}
+input{display:block;box-sizing:border-box;width:100%;background:#0b111a;color:#fff;margin:.5rem 0}
+button{background:#2a5778;color:white;cursor:pointer;margin:.7rem 0}
+button:disabled{opacity:.5;cursor:not-allowed}
+#ceremony{border-top:1px solid #39465a;margin-top:1rem}
+#status{font-weight:600;min-height:2rem}
