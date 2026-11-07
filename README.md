@@ -40,6 +40,14 @@ See the [architecture](docs/ARCHITECTURE.md), [PhiID ↔ PhiMail identity contra
 
 PhiID and PhiMail now share a **local development OIDC issuer** through independent clients. PhiCloud still exposes **no identity gateway or mail API**; see [R2 verified-identity boundary](docs/PHIMAIL_IDENTITY_R2.md).
 
+## R9: Independent local revocation witness (stale-backup safety proof)
+
+The optional R9 recovery fence adds an owner-private **append-only witness file in a separate backup directory** for local tenant membership revocations. A copied older SQLite database with restored memberships **cannot silently re-enable** those memberships while the independent witness remains current. The protected server fails closed and the offline operator must explicitly perform **revoke-only reconciliation**; no access is ever regranted by recovery.
+
+This is an opt-in Linux/WSL2 **synthetic tenant fixture**. It protects against accidental SQLite-only rollback, **not** against a privileged attacker restoring both databases and witness, and it is **not** a production backup service, encrypted store, tamper-proof journal, or real PhiVault integration.
+
+See [R9 stale-backup and crash-recovery proof](docs/R9_BACKUP_REVOCATION_FENCE.md).
+
 ## R4: Two-user resource ownership isolation (disposable localhost demo)
 
 The optional, separately gated R4 resource demo adds short-lived **memory-only** records owned by the exact Keycloak-verified `(issuer, subject)` pair. A client with `phicloud.demo.read` can list/read only its own records, while `phicloud.demo.write` allows only explicitly acknowledged create/delete. Two otherwise valid accounts cannot access each other's record IDs. Each request repeats fresh Keycloak token introspection, so upstream revocation immediately denies access.
