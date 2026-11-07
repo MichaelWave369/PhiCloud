@@ -155,6 +155,28 @@ a synthetic authenticator and a real disposable Keycloak identity.
 The origin is fixed to localhost for development only, and the
 operator backend remains POSIX-only.
 
+## R10: local browser passkey enrollment (experimental)
+
+The [R10 local passkey enrollment tool](docs/R10_LOCAL_PASSKEY_ENROLLMENT.md)
+adds a **real browser WebAuthn registration ceremony**, gated by a
+one-use code from an explicitly started local terminal. It verifies
+the returned authenticator credential through the pinned WebAuthn RP
+library before storing its public key and sign counter in the private
+R9 SQLite operator credential registry. The operator must already
+have a trusted enrolled R7 signing key.
+
+**Browser enrollment is not approval**: this does not authenticate the
+operator's real-world identity, grant access, approve any signed review,
+or let PhiCloud perform PhiOS effects. No public endpoint is added to
+the default registry. The separate enrollment tool is localhost-only,
+disabled by default, uses the existing fixed `http://localhost:8769`
+origin, and requires a trusted Linux/WSL operator-controlled database.
+
+CI verifies the full registration parser with **synthetic** WebAuthn
+authenticator output. Actual browser/passkey hardware compatibility
+requires manual validation. Real user identity binding and a
+human-facing exact-action approval ceremony are future work.
+
 ## First executable milestone
 
 The R0 prototype offers **local-only, read-only service declarations** and standard-library tests. It is not an IAM server, mail server, storage host, or cloud provider. Any inventory is explicitly declarative, not a live-health or integration claim.
