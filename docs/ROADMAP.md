@@ -51,3 +51,13 @@ Checkpoints are **acceptance conditions**, not a claim that the services exist.
 - [ ] Availability and performance claims supported by observed evidence
 
 **Principle:** built and green tests != securely deployed; an inventory entry != a live service.
+
+## R3a: Protected local OAuth resource-server proof (security milestone)
+
+- [x] Add opt-in resource endpoint without changing public registry behavior
+- [x] Require confidential-client Keycloak introspection, exact issuer/audience/scope/expiry checks, no bearer-token decoding or homebuilt crypto
+- [x] Refuse wrong PhiMail/identity token, revoked/expired token, malformed bearer header and provider outages
+- [x] Add separate disposable Keycloak + authorization-code PKCE CI workflow proving real token validation and revocation
+- [ ] Confirm all CI checks green on R3a PR
+- [ ] Add real per-resource owner/tenant isolation and permission checks before any file/mail content
+- [ ] Review TLS, secret rotation, audit, recovery and public security perimeter separately before hosting
