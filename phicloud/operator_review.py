@@ -251,12 +251,16 @@ class LocalOperatorApproval:
         if not self._session_valid(session,now):
             raise PolicyDenied("approval session expired or invalid")
         self._spent=True
-        # R6's acknowledged=False burns the pending ticket regardless of
-        # whether the UI ever issued its WebAuthn challenge.
-        self.policy.approve(
-            self.receipt["review_id"],shown_request=self.request,
-            acknowledged=False,now=now,
-        )
+        # A WebAuthn challenge must not fall back to R6 acknowledgment.
+        # The R9 routine burns the issued challenge on a deliberately invalid
+        # assertion; without a challenge R6's deny path burns the ticket.
+        if self._challenge_issued:
+            self.policy.approve_signed_with_stepup(self.receipt,{},now=now)
+        else:
+            self.policy.approve(
+                self.receipt["review_id"],shown_request=self.request,
+                acknowledged=False,now=now,
+            )
         return {
             "review_recorded":False,"declined":True,
             "execution_authority":False,
