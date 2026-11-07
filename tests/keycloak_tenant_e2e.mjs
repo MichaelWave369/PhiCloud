@@ -130,7 +130,7 @@ function tenantFixture(alice,bob) {
     ],
   });
 }
-async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=null,envelopeKey=null) {
+async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=null,envelopeKey=null,rotationWitness=null) {
   const env={
     ...process.env,
     NODE_ENV:'test',
@@ -143,6 +143,13 @@ async function withPython(dbPath,secret,provision,action,fencePath=null,keyPath=
   };
   if(provision)env.PHICLOUD_TENANT_PROVISION_JSON=provision;
   else delete env.PHICLOUD_TENANT_PROVISION_JSON;
+  if(rotationWitness){
+    env.PHICLOUD_ENABLE_ROTATION_FENCE_DEV='1';
+    env.PHICLOUD_ENVELOPE_ROTATION_WITNESS_PATH=rotationWitness;
+  }else{
+    delete env.PHICLOUD_ENABLE_ROTATION_FENCE_DEV;
+    delete env.PHICLOUD_ENVELOPE_ROTATION_WITNESS_PATH;
+  }
   if(envelopeKey){
     env.PHICLOUD_ENABLE_ENVELOPE_DEV='1';
     env.PHICLOUD_ENVELOPE_KEK_PATH=envelopeKey;
@@ -210,9 +217,13 @@ async function runTests(adminToken,alice,bob,secret){
   const temp=mkdtempSync(join(tmpdir(),'phicloud-r6-e2e-'));
   const independent=mkdtempSync(join(tmpdir(),'phicloud-r9-witness-'));
   const keyDirectory=mkdtempSync(join(tmpdir(),'phicloud-r10-independent-key-'));
+  const rotationDir=mkdtempSync(join(tmpdir(),'phicloud-r12-rotation-witness-'));
+  const rotationWitness=join(rotationDir,'kek-epochs.jsonl');
   const sealedKey=join(keyDirectory,'sealed-test.key');
   const envelopeOld=join(keyDirectory,'envelope-old.key');
   const envelopeNew=join(keyDirectory,'envelope-new.key');
+  const envelopeThird=join(keyDirectory,'envelope-third.key');
+  const rotationSnapshot=join(temp,'pre-rotation-snapshot.sqlite');
   const path=join(temp,'private.sqlite');
   const fence=join(independent,'owner-revocations.jsonl');
   const snapshot=join(temp,'older-snapshot.sqlite');
@@ -398,6 +409,76 @@ async function runTests(adminToken,alice,bob,secret){
     },null,sealedKey,envelopeNew);
     console.log('PASS: R11 real Keycloak two-subject envelope ownership, scoped DEK wrap, offline KEK rotation and retained readability');
 
+    console.log('R12: enroll independent epoch witness, then reproduce old DB plus old KEK restore');
+    const thirdKey=spawnSync('python',[
+      '-m','phicloud.sealed_key_operator','--db',path,
+      '--key-path',envelopeThird,'--confirm','CREATE SYNTHETIC TEST KEY'
+    ],{encoding:'utf8',timeout:8000,env:provisionEnv});
+    assert.equal(thirdKey.status,0,'R12 third distinct KEK provision');
+
+    const enrollWitness=spawnSync('python',[
+      '-m','phicloud.envelope_rotation_enroll','--db',path,
+      '--active-key',envelopeNew,'--rotation-witness',rotationWitness,
+      '--confirm','ENROLL SYNTHETIC KEY ROTATION WITNESS'
+    ],{
+      encoding:'utf8',timeout:8000,
+      env:{...process.env,PHICLOUD_ROTATION_WITNESS_OPERATOR_DEV:'1',
+           PHICLOUD_ENV:'test',NODE_ENV:'test'},
+    });
+    assert.equal(enrollWitness.status,0,'R12 offline rotation witness enrollment');
+    copyFileSync(path,rotationSnapshot);
+    const secondRotation=spawnSync('python',[
+      '-m','phicloud.envelope_operator','--db',path,
+      '--old-key',envelopeNew,'--new-key',envelopeThird,
+      '--rotation-witness',rotationWitness,
+      '--confirm','REWRAP SYNTHETIC ENVELOPES'
+    ],{
+      encoding:'utf8',timeout:9000,
+      env:{...process.env,PHICLOUD_ENVELOPE_OPERATOR_DEV:'1',
+           PHICLOUD_ENV:'test',NODE_ENV:'test'}
+    });
+    assert.equal(secondRotation.status,0,'R12 independent witnessed rewrap');
+    assert.ok(secondRotation.stdout.includes('rewrapped_markers=2'));
+
+    console.log('R12: restore SQLite-only snapshot plus old KEK, but retain independent witness');
+    copyFileSync(rotationSnapshot,path);
+    const stale=spawnSync('python',[
+      '-c','import sys; from phicloud.tenant_store import LocalTenantStore; '+
+      'from phicloud.envelope_demo import EnvelopeDemoStore; '+
+      'db=LocalTenantStore(sys.argv[1]); '+
+      'EnvelopeDemoStore(db,sys.argv[2],rotation_witness_path=sys.argv[3])',
+      path,envelopeNew,rotationWitness
+    ],{encoding:'utf8',timeout:7000});
+    assert.notEqual(stale.status,0,
+      'R12 stale restored SQLite and matching old KEK unexpectedly bypassed witness');
+
+    const recovered=spawnSync('python',[
+      '-m','phicloud.envelope_operator','--db',path,
+      '--old-key',envelopeNew,'--new-key',envelopeThird,
+      '--rotation-witness',rotationWitness,'--resume-pending',
+      '--confirm','RECONCILE SYNTHETIC KEY ROTATION'
+    ],{
+      encoding:'utf8',timeout:9000,
+      env:{...process.env,PHICLOUD_ENVELOPE_OPERATOR_DEV:'1',
+           PHICLOUD_ENV:'test',NODE_ENV:'test'}
+    });
+    assert.equal(recovered.status,0,'R12 offline exact pending-epoch reconciliation');
+    assert.ok(recovered.stdout.includes('rewrapped_markers=2'));
+
+    await withPython(path,secret,null,async()=>{
+      await check(await request(envelopeAliceRead,'GET',
+        envelopePath('alpha-team',envelopeAliceId)),200,
+        'Alice lost own envelope after R12 restore and reconciliation');
+      await check(await request(envelopeBobRead,'GET',
+        envelopePath('alpha-team',envelopeBobId)),200,
+        'Bob lost own envelope after R12 restore and reconciliation');
+      await check(await request(envelopeBobRead,'GET',
+        envelopePath('alpha-team',envelopeAliceId)),404,
+        'witness recovery exposed Alice marker to Bob');
+    },null,sealedKey,envelopeThird,rotationWitness);
+    console.log('PASS: R12 old SQLite plus old KEK denied by independent witness; exact offline repair retains owner isolation');
+
+
     console.log('R6: restarting resource server and reopening private SQLite');
     await withPython(path,secret,null,async()=>{
       await check(await request(aliceRead,'GET',url('alpha-team','records/'+aliceId)),200,
@@ -552,6 +633,7 @@ async function runTests(adminToken,alice,bob,secret){
     rmSync(temp,{recursive:true,force:true});
     rmSync(independent,{recursive:true,force:true});
     rmSync(keyDirectory,{recursive:true,force:true});
+    rmSync(rotationDir,{recursive:true,force:true});
   }
 }
 
