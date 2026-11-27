@@ -1,0 +1,38 @@
+name: PhiNet R02 synthetic placement census
+on:
+  pull_request:
+    paths:
+      - 'phicloud/phinet*.py'
+      - 'tests/test_phinet*.py'
+      - 'docs/PHINET_FABRIC_R02.md'
+      - '.github/workflows/phinet-r02.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'phicloud/phinet*.py'
+      - 'tests/test_phinet*.py'
+      - 'docs/PHINET_FABRIC_R02.md'
+      - '.github/workflows/phinet-r02.yml'
+permissions:
+  contents: read
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_phinet*.py' -v
+      - name: Execute frozen study and print paired summary
+        run: |
+          python -m phicloud.phinet_study > phinet-r02-report.json
+          python -c "import json; r=json.load(open('phinet-r02-report.json')); print(json.dumps({'scenarios':r['scenario_count'],'plans':r['plan_count'],'sha256':r['report_sha256'],'holdout':r['groups']['holdout/all'],'affinity_trap':r['groups']['holdout/affinity-trap']}, indent=2))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phinet-r02-synthetic-report
+          path: phinet-r02-report.json
+          if-no-files-found: error

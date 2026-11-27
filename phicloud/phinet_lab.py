@@ -6,7 +6,7 @@ import re
 
 SCHEMA = "PHINET_PLACEMENT_R01"
 MAX_ITEMS = 64
-POLICIES = ("first-fit", "locality")
+POLICIES = ("first-fit", "locality", "compute-rate")
 ID = re.compile(r"[a-z][a-z0-9-]{0,47}", re.ASCII)
 
 
@@ -186,6 +186,8 @@ def simulate(workers, tasks, policy="locality"):
                     continue
                 if policy == "locality":
                     free.sort(key=lambda p: (p[1]["ticks"], p[1]["cold_mib"], p[1]["network_mib"], p[0]))
+                elif policy == "compute-rate":
+                    free.sort(key=lambda p: (-(ws[p[0]].gpu_rate if t.kind == "gpu" else ws[p[0]].cpu_rate), p[0]))
                 wid, plan = free[0]
                 end = clock + plan["ticks"]
                 records.append({"task": tid, "decision": "SIMULATED_PLACE", "worker": wid,
@@ -236,7 +238,7 @@ def fixture():
 
 def main():
     workers, tasks = fixture()
-    print(json.dumps({p: simulate(workers, tasks, p) for p in POLICIES}, indent=2))
+    print(json.dumps({p: simulate(workers, tasks, p) for p in ("first-fit", "locality")}, indent=2))
 
 
 if __name__ == "__main__":
