@@ -1,0 +1,38 @@
+name: PhiNet R03 causal scarcity study
+on:
+  pull_request:
+    paths:
+      - 'phicloud/phinet*.py'
+      - 'tests/test_phinet*.py'
+      - 'docs/PHINET_FABRIC_R03.md'
+      - '.github/workflows/phinet-r03.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'phicloud/phinet*.py'
+      - 'tests/test_phinet*.py'
+      - 'docs/PHINET_FABRIC_R03.md'
+      - '.github/workflows/phinet-r03.yml'
+permissions:
+  contents: read
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -p 'test_phinet*.py' -v
+      - name: Execute R03 and report signed paired deltas
+        run: |
+          python -m phicloud.phinet_causal > phinet-r03-report.json
+          python -c "import json; r=json.load(open('phinet-r03-report.json')); print(json.dumps({'scenarios':r['scenario_count'],'plans':r['plan_count'],'sha256':r['report_sha256'],'all':r['groups']['all'],'positive':r['groups']['affinity-control'],'negative':r['groups']['scarcity-counterexample']}, indent=2))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phinet-r03-synthetic-report
+          path: phinet-r03-report.json
+          if-no-files-found: error
