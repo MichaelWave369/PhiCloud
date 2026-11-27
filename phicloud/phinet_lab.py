@@ -6,7 +6,7 @@ import re
 
 SCHEMA = "PHINET_PLACEMENT_R01"
 MAX_ITEMS = 64
-POLICIES = ("first-fit", "locality", "compute-rate")
+POLICIES = ("first-fit", "locality", "compute-rate", "scarcity")
 ID = re.compile(r"[a-z][a-z0-9-]{0,47}", re.ASCII)
 
 
@@ -146,6 +146,16 @@ def simulate(workers, tasks, policy="locality"):
         raise ValueError("unknown policy")
     ws, ts = validate(workers, tasks)
     pending = set(ts)
+    if policy == "scarcity":
+        eligible_counts = {tid: sum(estimate(w, t, ws)[0] is not None for w in workers)
+                           for tid, t in ts.items()}
+        # Longest downstream path in edges, calculated without recursion.
+        depth = {}
+        while len(depth) < len(ts):
+            for tid in sorted(ts):
+                children = [child.id for child in tasks if tid in child.deps]
+                if tid not in depth and all(c in depth for c in children):
+                    depth[tid] = max((1 + depth[c] for c in children), default=0)
     completed, held, active, records = set(), set(), {}, []
     clock = 0
     while pending or active:
@@ -157,7 +167,8 @@ def simulate(workers, tasks, policy="locality"):
         progress = True
         while progress:
             progress = False
-            for tid in sorted(pending):
+            order = sorted(pending, key=lambda tid: (eligible_counts[tid], -depth[tid], tid)) if policy == "scarcity" else sorted(pending)
+            for tid in order:
                 t = ts[tid]
                 if set(t.deps) & held:
                     records.append({"task": tid, "decision": "HOLD", "reason": "DEPENDENCY_HELD"})
@@ -184,7 +195,7 @@ def simulate(workers, tasks, policy="locality"):
                 free = [(wid, plan) for wid, plan in candidates if wid not in active]
                 if not free:
                     continue
-                if policy == "locality":
+                if policy in ("locality", "scarcity"):
                     free.sort(key=lambda p: (p[1]["ticks"], p[1]["cold_mib"], p[1]["network_mib"], p[0]))
                 elif policy == "compute-rate":
                     free.sort(key=lambda p: (-(ws[p[0]].gpu_rate if t.kind == "gpu" else ws[p[0]].cpu_rate), p[0]))
